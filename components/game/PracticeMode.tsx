@@ -19,7 +19,7 @@ interface PracticeModeProps {
 export default function PracticeMode({ operation }: PracticeModeProps) {
   const store = useAppStore();
   const profile = useAppStore(getActiveProfile);
-  const tutorState = useAppStore(s => profile ? s.getTutorState(profile.id) : null);
+  const tutorState = useAppStore(s => profile ? (s.tutorStates[profile.id] ?? null) : null);
 
   const [qIndex, setQIndex] = useState(0);
   const [score, setScore] = useState(0);
