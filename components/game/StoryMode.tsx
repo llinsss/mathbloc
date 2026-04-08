@@ -10,6 +10,7 @@ import ScoreScreen from './ScoreScreen';
 import Mascot from '@/components/ui/Mascot';
 import RewardBar from '@/components/ui/RewardBar';
 import ProgressBar from '@/components/ui/ProgressBar';
+import HomeButton from '@/components/ui/HomeButton';
 
 const QUESTIONS_PER_CHAPTER = 8;
 
@@ -56,7 +57,6 @@ export default function StoryMode() {
     setMascotMood(correct ? 'happy' : 'sad');
     speak(msg);
 
-    // Chapter badge
     if (qIndex + 1 >= QUESTIONS_PER_CHAPTER) {
       const badge = BADGES.find(b => b.id === `chapter-${chapter.id}`);
       if (badge && !profile.badges.find(b => b.id === badge.id)) {
@@ -78,12 +78,17 @@ export default function StoryMode() {
 
   if (!profile) return <div className="text-center p-8 text-gray-500">No profile selected.</div>;
 
-  // Chapter selection screen
+  // ── Chapter selection screen ──
   if (!selectedChapter) {
     return (
       <div className="min-h-screen bg-gradient-to-b from-green-100 to-teal-100 p-4">
         <div className="max-w-md mx-auto space-y-4">
-          <RewardBar coins={profile.coins} stars={profile.stars} name={profile.name} avatar={profile.avatar} />
+          <div className="flex items-center gap-2">
+            <div className="flex-1">
+              <RewardBar coins={profile.coins} stars={profile.stars} name={profile.name} avatar={profile.avatar} />
+            </div>
+            <HomeButton gameActive={false} />
+          </div>
           <div className="text-center">
             <h2 className="text-3xl font-black text-gray-800">📖 Story Mode</h2>
             <p className="text-gray-500 font-bold">Choose your adventure!</p>
@@ -122,6 +127,7 @@ export default function StoryMode() {
     );
   }
 
+  // ── Active chapter screen ──
   return (
     <div className="min-h-screen bg-gradient-to-b from-green-100 to-teal-100 p-4">
       {done && (
@@ -133,7 +139,12 @@ export default function StoryMode() {
         />
       )}
       <div className="max-w-md mx-auto space-y-4">
-        <RewardBar coins={profile.coins} stars={profile.stars} name={profile.name} avatar={profile.avatar} />
+        <div className="flex items-center gap-2">
+          <div className="flex-1">
+            <RewardBar coins={profile.coins} stars={profile.stars} name={profile.name} avatar={profile.avatar} />
+          </div>
+          <HomeButton gameActive={!done} />
+        </div>
 
         <div className="card-game border-green-300 p-3 flex items-center gap-3">
           <span className="text-3xl">{chapter!.emoji}</span>

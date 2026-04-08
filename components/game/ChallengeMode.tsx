@@ -10,6 +10,7 @@ import ScoreScreen from './ScoreScreen';
 import Mascot from '@/components/ui/Mascot';
 import RewardBar from '@/components/ui/RewardBar';
 import Timer from '@/components/ui/Timer';
+import HomeButton from '@/components/ui/HomeButton';
 
 const CHALLENGE_SECONDS = 60;
 
@@ -94,7 +95,12 @@ export default function ChallengeMode({ operation }: ChallengeModeProps) {
       )}
 
       <div className="max-w-md mx-auto space-y-4">
-        <RewardBar coins={profile.coins} stars={profile.stars} name={profile.name} avatar={profile.avatar} />
+        <div className="flex items-center gap-2">
+          <div className="flex-1">
+            <RewardBar coins={profile.coins} stars={profile.stars} name={profile.name} avatar={profile.avatar} />
+          </div>
+          <HomeButton gameActive={started && !done} />
+        </div>
 
         <div className="flex justify-between items-center">
           <div className="bg-white rounded-2xl px-4 py-2 border-2 border-green-300 font-black text-green-700">

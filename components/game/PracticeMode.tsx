@@ -9,6 +9,7 @@ import QuestionCard from './QuestionCard';
 import ScoreScreen from './ScoreScreen';
 import Mascot from '@/components/ui/Mascot';
 import RewardBar from '@/components/ui/RewardBar';
+import HomeButton from '@/components/ui/HomeButton';
 
 const QUESTIONS_PER_SESSION = 10;
 
@@ -107,7 +108,12 @@ export default function PracticeMode({ operation }: PracticeModeProps) {
       )}
 
       <div className="max-w-md mx-auto space-y-4">
-        <RewardBar coins={profile.coins} stars={profile.stars} name={profile.name} avatar={profile.avatar} />
+        <div className="flex items-center gap-2">
+          <div className="flex-1">
+            <RewardBar coins={profile.coins} stars={profile.stars} name={profile.name} avatar={profile.avatar} />
+          </div>
+          <HomeButton gameActive={!done} />
+        </div>
 
         {/* Progress dots */}
         <div className="flex justify-center gap-2">
