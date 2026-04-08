@@ -9,9 +9,9 @@
     "lint": "eslint",
     "compile": "hardhat compile",
     "test:contracts": "hardhat test",
-    "deploy:alfajores": "hardhat run contracts/scripts/deploy.ts --network alfajores",
-    "deploy:celo": "hardhat run contracts/scripts/deploy.ts --network celo",
-    "daily": "ts-node contracts/scripts/daily-activity.ts"
+    "deploy:alfajores": "TS_NODE_PROJECT=tsconfig.hardhat.json hardhat run contracts/scripts/deploy.cjs --network alfajores",
+    "deploy:celo": "TS_NODE_PROJECT=tsconfig.hardhat.json hardhat run contracts/scripts/deploy.cjs --network celo",
+    "daily": "node contracts/scripts/daily-activity.cjs"
   },
   "dependencies": {
     "next": "16.2.2",

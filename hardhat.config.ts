@@ -29,6 +29,9 @@ const config: HardhatUserConfig = {
     cache:     "./contracts/cache",
     artifacts: "./contracts/artifacts",
   },
+  // Tell ts-node to use the CJS tsconfig so Hardhat scripts work
+  // @ts-ignore
+  tsconfig: "tsconfig.hardhat.json",
 };
 
 export default config;

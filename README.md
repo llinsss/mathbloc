@@ -146,6 +146,6 @@ mathbloc/
 
 ## Contract Address
 
-> Deployed address will appear here after running `npm run deploy:alfajores`
+**Celo Mainnet:** `0xCcA8f0878E703425Ec8000d38aDbEDaCD10F5d7d`
 
-Check on CeloScan: https://alfajores.celoscan.io
+Check on CeloScan: https://celoscan.io/address/0xCcA8f0878E703425Ec8000d38aDbEDaCD10F5d7d
