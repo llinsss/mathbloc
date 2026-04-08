@@ -3,6 +3,8 @@ import { useRouter } from 'next/navigation';
 import { useAppStore, getActiveProfile } from '@/lib/store';
 import ProfileSelector from '@/components/dashboard/ProfileSelector';
 import Mascot from '@/components/ui/Mascot';
+import dynamic from 'next/dynamic';
+const Web3Panel = dynamic(() => import('@/components/dashboard/Web3Panel'), { ssr: false });
 
 export default function HomePage() {
   const router = useRouter();
@@ -47,7 +49,11 @@ export default function HomePage() {
         </div>
       )}
 
-      <p className="text-center text-xs text-gray-400 mt-8">Ages 2–9 · Math made fun!</p>
+      <div className="mt-6">
+        <Web3Panel />
+      </div>
+
+      <p className="text-center text-xs text-gray-400 mt-6">Ages 2–9 · Math made fun!</p>
     </div>
   );
 }
