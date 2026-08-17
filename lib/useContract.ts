@@ -1,5 +1,6 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useCallback } from 'react';
 import { ethers, BrowserProvider, Contract } from 'ethers';
+import contractDeployment from './contract.json';
 
 // Extend window type for ethereum wallet
 declare global {
@@ -12,12 +13,7 @@ declare global {
 }
 
 // Loaded after deployment — will be empty object before deploy
-let deploymentData: { address: string; abi: unknown[]; chainId: number } | null = null;
-try {
-  deploymentData = require('./contract.json');
-} catch {
-  // contract not deployed yet
-}
+const deploymentData: { address: string; abi: unknown[]; chainId: number } | null = contractDeployment;
 
 export interface OnChainPlayer {
   username: string;

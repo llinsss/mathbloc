@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-var-requires */
 const hre = require("hardhat");
 const fs  = require("fs");
 const path = require("path");

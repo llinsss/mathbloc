@@ -22,7 +22,7 @@ describe("MathBlocGame", function () {
       const p = await contract.getPlayer(player1.address);
       expect(p.username).to.equal("Alice");
       expect(p.exists).to.be.true;
-      expect(await contract.getTotalPlayers()).to.equal(1);
+      expect(await contract.getTotalPlayers()).to.equal(1n);
     });
 
     it("rejects duplicate registration", async () => {
@@ -43,16 +43,16 @@ describe("MathBlocGame", function () {
     it("records activity and awards coins", async () => {
       await contract.connect(player1).recordActivity(80, 8, 10, "addition");
       const p = await contract.getPlayer(player1.address);
-      expect(p.totalScore).to.equal(80);
-      expect(p.totalCorrect).to.equal(8);
-      expect(p.coinsEarned).to.equal(10); // DAILY_REWARD_COINS
+      expect(p.totalScore).to.equal(80n);
+      expect(p.totalCorrect).to.equal(8n);
+      expect(p.coinsEarned).to.equal(10n); // DAILY_REWARD_COINS
     });
 
     it("awards perfect score bonus", async () => {
       await contract.connect(player1).recordActivity(100, 10, 10, "addition");
       const p = await contract.getPlayer(player1.address);
       // DAILY_REWARD_COINS(10) + PERFECT_SCORE_BONUS(20) = 30
-      expect(p.coinsEarned).to.equal(30);
+      expect(p.coinsEarned).to.equal(30n);
     });
 
     it("rejects unregistered player", async () => {
@@ -80,7 +80,7 @@ describe("MathBlocGame", function () {
       await contract.connect(player1).register("Bob");
       await contract.connect(player1).recordActivity(50, 5, 10, "counting");
       const p = await contract.getPlayer(player1.address);
-      expect(p.streak).to.equal(1);
+      expect(p.streak).to.equal(1n);
     });
   });
 

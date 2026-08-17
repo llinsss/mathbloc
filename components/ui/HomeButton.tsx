@@ -33,7 +33,7 @@ export default function HomeButton({ gameActive = true }: HomeButtonProps) {
             <div className="text-5xl mb-3">⚠️</div>
             <h3 className="text-xl font-black text-gray-800 mb-2">Quit the game?</h3>
             <p className="text-gray-500 text-sm mb-5">
-              Your current progress will be lost and you won't earn rewards for this session!
+              Your current progress will be lost and you won&apos;t earn rewards for this session!
             </p>
             <div className="flex gap-3">
               <button

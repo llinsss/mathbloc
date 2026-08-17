@@ -1,5 +1,5 @@
 'use client';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAppStore, getActiveProfile } from '@/lib/store';
 import { getOperationsForAgeGroup } from '@/lib/questionEngine';
@@ -27,8 +27,11 @@ export default function GamePage() {
   const [mode, setMode] = useState<GameMode | null>(null);
   const [operation, setOperation] = useState<Operation | null>(null);
 
+  useEffect(() => {
+    if (!profile) router.replace('/');
+  }, [profile, router]);
+
   if (!profile) {
-    router.push('/');
     return null;
   }
 
@@ -96,7 +99,7 @@ export default function GamePage() {
           onClick={handleStart}
           className="btn-game w-full py-5 text-2xl bg-gradient-to-b from-purple-400 to-purple-500 border-4 border-purple-600 animate-bounce-in"
         >
-          🚀 Let's Go!
+          🚀 Let&apos;s Go!
         </button>
       )}
     </div>

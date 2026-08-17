@@ -1,14 +1,17 @@
 {
-  "name": "math",
+  "name": "mathbloc",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": ">=20.9.0"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
     "compile": "hardhat compile",
-    "test:contracts": "hardhat test",
+    "test:contracts": "TS_NODE_PROJECT=tsconfig.hardhat.json hardhat test",
     "deploy:alfajores": "TS_NODE_PROJECT=tsconfig.hardhat.json hardhat run contracts/scripts/deploy.cjs --network alfajores",
     "deploy:celo": "TS_NODE_PROJECT=tsconfig.hardhat.json hardhat run contracts/scripts/deploy.cjs --network celo",
     "daily": "node contracts/scripts/daily-activity.cjs"

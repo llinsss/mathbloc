@@ -1,5 +1,5 @@
 'use client';
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback } from 'react';
 import { useAppStore, getActiveProfile } from '@/lib/store';
 import { generateQuestion } from '@/lib/questionEngine';
 import { getTutorMessage } from '@/lib/aiTutor';
@@ -33,7 +33,7 @@ export default function ChallengeMode({ operation }: ChallengeModeProps) {
   const [question, setQuestion] = useState(() =>
     generateQuestion(operation, tutorState?.currentDifficulty ?? 1)
   );
-  const timerKey = useRef(0);
+  const [timerKey, setTimerKey] = useState(0);
 
   const handleExpire = useCallback(() => {
     setDone(true);
@@ -77,7 +77,7 @@ export default function ChallengeMode({ operation }: ChallengeModeProps) {
     setScore(0); setTotal(0); setDone(false); setStarted(false);
     setNewBadge(null); setMascotMood('idle');
     setMascotMsg('Answer as many as you can! ⚡');
-    timerKey.current += 1;
+    setTimerKey(key => key + 1);
     const t = profile ? store.getTutorState(profile.id) : null;
     setQuestion(generateQuestion(operation, t?.currentDifficulty ?? 1));
   }
@@ -106,7 +106,7 @@ export default function ChallengeMode({ operation }: ChallengeModeProps) {
           <div className="bg-white rounded-2xl px-4 py-2 border-2 border-green-300 font-black text-green-700">
             ✅ {score} correct
           </div>
-          <Timer key={timerKey.current} seconds={CHALLENGE_SECONDS} running={started && !done} onExpire={handleExpire} />
+          <Timer key={timerKey} seconds={CHALLENGE_SECONDS} running={started && !done} onExpire={handleExpire} />
           <div className="bg-white rounded-2xl px-4 py-2 border-2 border-gray-300 font-black text-gray-600">
             📝 {total} total
           </div>

@@ -6,14 +6,6 @@ interface MascotProps {
   size?: 'sm' | 'md' | 'lg';
 }
 
-const MOODS: Record<string, string> = {
-  idle: '🦉',
-  happy: '🦉',
-  sad: '🦉',
-  thinking: '🦉',
-  excited: '🦉',
-};
-
 const MOOD_CLASSES: Record<string, string> = {
   idle: 'animate-float',
   happy: 'animate-bounce-in',

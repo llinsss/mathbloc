@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-var-requires */
 const { ethers } = require("ethers");
 const dotenv     = require("dotenv");
 const fs         = require("fs");

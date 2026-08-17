@@ -1,4 +1,4 @@
-import { StoryChapter, Operation } from './types';
+import { StoryChapter } from './types';
 
 export const STORY_CHAPTERS: StoryChapter[] = [
   { id: 1, title: 'Number Island', emoji: '🏝️', description: 'Learn to recognize numbers 1-5!', operations: ['recognition'], requiredStars: 0, unlocked: true },

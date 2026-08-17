@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { ChildProfile, ProgressRecord, Operation, AITutorState, GameMode, Difficulty, Badge } from './types';
+import { ChildProfile, ProgressRecord, Operation, AITutorState, GameMode, Badge } from './types';
 import { createTutorState, updateTutor } from './aiTutor';
 
 interface GameSession {

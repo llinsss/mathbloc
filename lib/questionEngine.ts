@@ -52,7 +52,6 @@ export function generateQuestion(operation: Operation, difficulty: Difficulty): 
   switch (operation) {
     case 'recognition': {
       const num = difficulty <= 2 ? randomInt(1, 5) : randomInt(1, 10);
-      const emoji = EMOJIS[randomInt(0, EMOJIS.length - 1)];
       return {
         id, operation, difficulty,
         prompt: 'What number is this?',

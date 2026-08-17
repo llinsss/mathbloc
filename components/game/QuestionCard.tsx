@@ -12,7 +12,7 @@ interface QuestionCardProps {
 
 export default function QuestionCard({ question, onAnswer, showHint, disabled }: QuestionCardProps) {
   const [selected, setSelected] = useState<number | null>(null);
-  const [startTime] = useState(Date.now());
+  const [startTime] = useState(() => Date.now());
   const [hintsUsed, setHintsUsed] = useState(0);
   const [hintVisible, setHintVisible] = useState(false);
   const [shake, setShake] = useState(false);
@@ -22,11 +22,13 @@ export default function QuestionCard({ question, onAnswer, showHint, disabled }:
     setHintsUsed(0);
     setHintVisible(false);
     speak(question.prompt);
-  }, [question.id]);
+  }, [question.id, question.prompt]);
 
   function handleChoice(choice: number) {
     if (disabled || selected !== null) return;
     setSelected(choice);
+    // Event time is intentionally read at interaction time, not during render.
+    // eslint-disable-next-line react-hooks/purity
     const timeMs = Date.now() - startTime;
     if (choice !== question.answer) {
       setShake(true);

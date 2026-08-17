@@ -25,7 +25,7 @@ export default function HomePage() {
       />
 
       <div className="mt-6">
-        <p className="text-sm font-black text-gray-500 uppercase tracking-wide mb-3">Who's playing?</p>
+        <p className="text-sm font-black text-gray-500 uppercase tracking-wide mb-3">Who&apos;s playing?</p>
         <ProfileSelector />
       </div>
 
