@@ -2,7 +2,6 @@ import { useState, useCallback } from 'react';
 import { ethers, BrowserProvider, Contract } from 'ethers';
 import contractDeployment from './contract.json';
 
-// Extend window type for ethereum wallet
 declare global {
   interface Window {
     ethereum?: {
@@ -12,8 +11,10 @@ declare global {
   }
 }
 
-// Loaded after deployment — will be empty object before deploy
-const deploymentData: { address: string; abi: unknown[]; chainId: number } | null = contractDeployment;
+const deploymentData: { address: string; abi: unknown[]; chainId: number } | null =
+  contractDeployment && (contractDeployment as Record<string, unknown>).address
+    ? (contractDeployment as { address: string; abi: unknown[]; chainId: number })
+    : null;
 
 export interface OnChainPlayer {
   username: string;
@@ -35,23 +36,64 @@ export interface LeaderboardEntry {
 }
 
 const CELO_ALFAJORES = {
-  chainId: '0xAEF3', // 44787
+  chainId: '0xAEF3',
   chainName: 'Celo Alfajores Testnet',
   nativeCurrency: { name: 'CELO', symbol: 'CELO', decimals: 18 },
   rpcUrls: ['https://alfajores-forno.celo-testnet.org'],
   blockExplorerUrls: ['https://alfajores.celoscan.io'],
 };
 
-export function useContract() {
-  const [provider, setProvider]   = useState<BrowserProvider | null>(null);
-  const [contract, setContract]   = useState<Contract | null>(null);
-  const [address, setAddress]     = useState<string | null>(null);
-  const [player, setPlayer]       = useState<OnChainPlayer | null>(null);
-  const [loading, setLoading]     = useState(false);
-  const [error, setError]         = useState<string | null>(null);
-  const [connected, setConnected] = useState(false);
+const CELO_MAINNET = {
+  chainId: '0xA4EC',
+  chainName: 'Celo Mainnet',
+  nativeCurrency: { name: 'CELO', symbol: 'CELO', decimals: 18 },
+  rpcUrls: ['https://forno.celo.org'],
+  blockExplorerUrls: ['https://celoscan.io'],
+};
 
-  // Connect wallet
+const NETWORK_CONFIGS: Record<number, typeof CELO_ALFAJORES> = {
+  44787: CELO_ALFAJORES,
+  42220: CELO_MAINNET,
+};
+
+const DEPLOYMENT_CHAIN_ID = deploymentData?.chainId ?? 42220;
+
+function hexToDecimal(hex: string): number {
+  return parseInt(hex, 16);
+}
+
+async function getCurrentChainId(): Promise<number | null> {
+  if (typeof window === 'undefined' || !window.ethereum) return null;
+  try {
+    const chainId = await window.ethereum.request({ method: 'eth_chainId' });
+    return hexToDecimal(chainId as string);
+  } catch {
+    return null;
+  }
+}
+
+export function useContract() {
+  const [provider, setProvider] = useState<BrowserProvider | null>(null);
+  const [contract, setContract] = useState<Contract | null>(null);
+  const [address, setAddress] = useState<string | null>(null);
+  const [player, setPlayer] = useState<OnChainPlayer | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [connected, setConnected] = useState(false);
+  const [currentChainId, setCurrentChainId] = useState<number | null>(null);
+
+  const correctNetwork = currentChainId === DEPLOYMENT_CHAIN_ID;
+
+  const refreshPlayer = useCallback(async () => {
+    if (!contract || !address) return;
+    try {
+      const p: OnChainPlayer = await contract.getPlayer(address);
+      setPlayer(p.exists ? p : null);
+    } catch {
+      // Player might not exist yet
+    }
+  }, [contract, address]);
+
   const connect = useCallback(async () => {
     if (typeof window === 'undefined' || !window.ethereum) {
       setError('No wallet found. Install MetaMask or Celo Wallet.');
@@ -68,31 +110,40 @@ export function useContract() {
 
       const web3Provider = new BrowserProvider(window.ethereum);
 
-      // Switch to Celo Alfajores
+      const targetNetwork = NETWORK_CONFIGS[DEPLOYMENT_CHAIN_ID] ?? CELO_MAINNET;
+
       try {
         await window.ethereum.request({
           method: 'wallet_switchEthereumChain',
-          params: [{ chainId: CELO_ALFAJORES.chainId }],
+          params: [{ chainId: targetNetwork.chainId }],
         });
       } catch (switchErr: unknown) {
         if ((switchErr as { code: number }).code === 4902) {
           await window.ethereum.request({
             method: 'wallet_addEthereumChain',
-            params: [CELO_ALFAJORES],
+            params: [targetNetwork],
           });
+        } else {
+          throw switchErr;
         }
       }
 
       const accounts = await web3Provider.send('eth_requestAccounts', []);
-      const signer   = await web3Provider.getSigner();
-      const gameContract = new Contract(deploymentData.address, deploymentData.abi as ethers.InterfaceAbi, signer);
+      const signer = await web3Provider.getSigner();
+      const gameContract = new Contract(
+        deploymentData.address,
+        deploymentData.abi as ethers.InterfaceAbi,
+        signer
+      );
+
+      const chainId = await getCurrentChainId();
 
       setProvider(web3Provider);
       setContract(gameContract);
       setAddress(accounts[0]);
       setConnected(true);
+      setCurrentChainId(chainId);
 
-      // Load player data
       const p: OnChainPlayer = await gameContract.getPlayer(accounts[0]);
       if (p.exists) setPlayer(p);
     } catch (err: unknown) {
@@ -102,7 +153,35 @@ export function useContract() {
     }
   }, []);
 
-  // Register on-chain
+  const switchNetwork = useCallback(async () => {
+    if (!window.ethereum || !deploymentData) return;
+    const targetNetwork = NETWORK_CONFIGS[DEPLOYMENT_CHAIN_ID] ?? CELO_MAINNET;
+    try {
+      await window.ethereum.request({
+        method: 'wallet_switchEthereumChain',
+        params: [{ chainId: targetNetwork.chainId }],
+      });
+      const chainId = await getCurrentChainId();
+      setCurrentChainId(chainId);
+
+      if (chainId === DEPLOYMENT_CHAIN_ID && address) {
+        const web3Provider = new BrowserProvider(window.ethereum);
+        const signer = await web3Provider.getSigner();
+        const gameContract = new Contract(
+          deploymentData.address,
+          deploymentData.abi as ethers.InterfaceAbi,
+          signer
+        );
+        setProvider(web3Provider);
+        setContract(gameContract);
+        const p: OnChainPlayer = await gameContract.getPlayer(address);
+        if (p.exists) setPlayer(p);
+      }
+    } catch (err: unknown) {
+      setError((err as Error).message || 'Network switch failed');
+    }
+  }, [address]);
+
   const register = useCallback(async (username: string) => {
     if (!contract) return;
     setLoading(true);
@@ -118,7 +197,6 @@ export function useContract() {
     }
   }, [contract, address]);
 
-  // Record game session on-chain
   const recordActivity = useCallback(async (
     score: number,
     correct: number,
@@ -139,7 +217,6 @@ export function useContract() {
     }
   }, [contract, player, address]);
 
-  // Claim CELO reward
   const claimReward = useCallback(async () => {
     if (!contract) return;
     setLoading(true);
@@ -155,7 +232,6 @@ export function useContract() {
     }
   }, [contract, address]);
 
-  // Fetch leaderboard
   const getLeaderboard = useCallback(async (topN = 10): Promise<LeaderboardEntry[]> => {
     if (!contract) return [];
     try {
@@ -169,8 +245,10 @@ export function useContract() {
   const contractAddress = deploymentData?.address ?? null;
 
   return {
-    connect, register, recordActivity, claimReward, getLeaderboard,
+    connect, register, recordActivity, claimReward, getLeaderboard, refreshPlayer,
     provider, contract, address, player, loading, error, connected,
     isDeployed, contractAddress,
+    correctNetwork, currentChainId, deploymentChainId: DEPLOYMENT_CHAIN_ID,
+    switchNetwork,
   };
 }

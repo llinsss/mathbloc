@@ -1,4 +1,5 @@
 'use client';
+import { type ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
 import Confetti from '@/components/ui/Confetti';
 
@@ -9,9 +10,10 @@ interface ScoreScreenProps {
   starsEarned: number;
   onPlayAgain: () => void;
   newBadge?: { name: string; emoji: string } | null;
+  children?: ReactNode;
 }
 
-export default function ScoreScreen({ score, total, coinsEarned, starsEarned, onPlayAgain, newBadge }: ScoreScreenProps) {
+export default function ScoreScreen({ score, total, coinsEarned, starsEarned, onPlayAgain, newBadge, children }: ScoreScreenProps) {
   const router = useRouter();
   const pct = total > 0 ? Math.round((score / total) * 100) : 0;
   const perfect = score === total;
@@ -27,7 +29,6 @@ export default function ScoreScreen({ score, total, coinsEarned, starsEarned, on
         </h2>
         <p className="text-gray-500 mb-4 font-bold">{score} / {total} correct ({pct}%)</p>
 
-        {/* Rewards */}
         <div className="flex justify-center gap-4 mb-4">
           <div className="bg-yellow-100 rounded-2xl px-4 py-2 border-2 border-yellow-300">
             <div className="text-2xl">⭐</div>
@@ -39,7 +40,6 @@ export default function ScoreScreen({ score, total, coinsEarned, starsEarned, on
           </div>
         </div>
 
-        {/* New badge */}
         {newBadge && (
           <div className="bg-purple-100 border-2 border-purple-300 rounded-2xl p-3 mb-4 animate-star-pop">
             <p className="text-purple-700 font-black text-sm">🎉 New Badge!</p>
@@ -47,6 +47,8 @@ export default function ScoreScreen({ score, total, coinsEarned, starsEarned, on
             <p className="text-purple-600 font-bold text-sm">{newBadge.name}</p>
           </div>
         )}
+
+        {children}
 
         <div className="flex flex-col gap-2">
           <button onClick={onPlayAgain} className="btn-game bg-gradient-to-b from-green-400 to-green-500 border-4 border-green-600 py-3 text-xl w-full">

@@ -1,6 +1,7 @@
 'use client';
 import { useRouter } from 'next/navigation';
 import ParentDashboard from '@/components/dashboard/ParentDashboard';
+import Web3Panel from '@/components/dashboard/Web3Panel';
 
 export default function DashboardPage() {
   const router = useRouter();
@@ -11,6 +12,9 @@ export default function DashboardPage() {
         <h1 className="text-2xl font-black text-gray-800">📊 Parent Dashboard</h1>
       </div>
       <ParentDashboard />
+      <div className="mt-6">
+        <Web3Panel />
+      </div>
     </div>
   );
 }
