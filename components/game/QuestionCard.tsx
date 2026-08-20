@@ -1,5 +1,5 @@
 'use client';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Question } from '@/lib/types';
 import { speak } from '@/lib/data';
 
@@ -12,12 +12,30 @@ interface QuestionCardProps {
 
 export default function QuestionCard({ question, onAnswer, showHint, disabled }: QuestionCardProps) {
   const [selected, setSelected] = useState<number | null>(null);
-  const [startTime] = useState(() => Date.now());
+  /**
+   * Monotonic start timestamp, recorded via performance.now() and reset on every
+   * question.id change. Using a ref avoids triggering re-renders on reset.
+   *
+   * Timing notes:
+   *  - performance.now() is monotonic — it is immune to system clock adjustments
+   *    that can skew Date.now() comparisons.
+   *  - Both performance.now() and Date.now() continue to advance when the tab is
+   *    hidden or the user switches apps. If the player backgrounds the tab mid-question
+   *    the elapsed time will include that hidden time. This is intentional: the
+   *    measurement represents wall-clock decision time, not active-focus time.
+   *  - timeMs is captured at the moment the user clicks an answer. The 600 ms
+   *    feedback animation that fires afterward does NOT inflate timeMs.
+   */
+  const startTimeRef = useRef<number>(performance.now());
   const [hintsUsed, setHintsUsed] = useState(0);
   const [hintVisible, setHintVisible] = useState(false);
   const [shake, setShake] = useState(false);
 
+  // Reset the clock and UI state whenever the question changes.
+  // This effect runs synchronously after the commit phase, before the user
+  // can interact, so no time leaks between consecutive questions.
   useEffect(() => {
+    startTimeRef.current = performance.now();
     setSelected(null);
     setHintsUsed(0);
     setHintVisible(false);
@@ -27,9 +45,8 @@ export default function QuestionCard({ question, onAnswer, showHint, disabled }:
   function handleChoice(choice: number) {
     if (disabled || selected !== null) return;
     setSelected(choice);
-    // Event time is intentionally read at interaction time, not during render.
-    // eslint-disable-next-line react-hooks/purity
-    const timeMs = Date.now() - startTime;
+    // Capture elapsed time at the exact moment of interaction.
+    const timeMs = Math.round(performance.now() - startTimeRef.current);
     if (choice !== question.answer) {
       setShake(true);
       setTimeout(() => setShake(false), 600);
