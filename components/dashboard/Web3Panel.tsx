@@ -4,7 +4,7 @@ import { useContract, LeaderboardEntry } from '@/lib/useContract';
 import { useAppStore, getActiveProfile } from '@/lib/store';
 
 export default function Web3Panel() {
-  const { connect, register, claimReward, getLeaderboard, player, address, loading, error, connected, isDeployed, contractAddress } = useContract();
+  const { connect, register, claimReward, getLeaderboard, player, address, loading, error, connected, isDeployed, contractAddress, networkName, explorerUrl } = useContract();
   const profile = useAppStore(getActiveProfile);
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
   const [showPanel, setShowPanel] = useState(false);
@@ -38,10 +38,10 @@ export default function Web3Panel() {
         <div className="card-game border-indigo-200 p-4 space-y-4 animate-bounce-in">
           {/* Contract info */}
           <div className="bg-indigo-50 rounded-xl p-3 border border-indigo-200">
-            <p className="text-xs font-black text-indigo-500 uppercase">Contract (Celo Alfajores)</p>
+            <p className="text-xs font-black text-indigo-500 uppercase">Contract ({networkName ?? 'Unsupported network'})</p>
             <p className="text-xs text-indigo-700 font-mono break-all">{contractAddress}</p>
             <a
-              href={`https://alfajores.celoscan.io/address/${contractAddress}`}
+              href={explorerUrl ?? '#'}
               target="_blank"
               rel="noreferrer"
               className="text-xs text-indigo-500 underline"

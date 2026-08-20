@@ -1,176 +1,120 @@
-import { useState, useCallback } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ethers, BrowserProvider, Contract } from 'ethers';
 import contractDeployment from './contract.json';
+import { assertContractBytecode, assertSupportedDeployment, getCeloNetwork, isUnknownChainError, isUserRejectedError, networkRecoveryMessage, toWalletChainConfig } from './networkConfig';
 
-// Extend window type for ethereum wallet
-declare global {
-  interface Window {
-    ethereum?: {
-      request: (args: { method: string; params?: unknown[] }) => Promise<unknown>;
-      on?: (event: string, handler: (...args: unknown[]) => void) => void;
-    };
-  }
-}
-
-// Loaded after deployment — will be empty object before deploy
-const deploymentData: { address: string; abi: unknown[]; chainId: number } | null = contractDeployment;
-
-export interface OnChainPlayer {
-  username: string;
-  totalScore: bigint;
-  totalCorrect: bigint;
-  totalAttempts: bigint;
-  streak: bigint;
-  lastActivityDay: bigint;
-  coinsEarned: bigint;
-  registeredAt: bigint;
-  exists: boolean;
-}
-
-export interface LeaderboardEntry {
-  player: string;
-  username: string;
-  totalScore: bigint;
-  streak: bigint;
-}
-
-const CELO_ALFAJORES = {
-  chainId: '0xAEF3', // 44787
-  chainName: 'Celo Alfajores Testnet',
-  nativeCurrency: { name: 'CELO', symbol: 'CELO', decimals: 18 },
-  rpcUrls: ['https://alfajores-forno.celo-testnet.org'],
-  blockExplorerUrls: ['https://alfajores.celoscan.io'],
+type EthereumEventHandler = (...args: unknown[]) => void;
+type EthereumProvider = {
+  request: (args: { method: string; params?: unknown[] }) => Promise<unknown>;
+  on?: (event: string, handler: EthereumEventHandler) => void;
+  removeListener?: (event: string, handler: EthereumEventHandler) => void;
 };
+declare global { interface Window { ethereum?: EthereumProvider; } }
+
+type DeploymentData = { address: string; abi: unknown[]; chainId: number };
+const deploymentData: DeploymentData | null = contractDeployment?.address ? contractDeployment : null;
+
+export interface OnChainPlayer { username: string; totalScore: bigint; totalCorrect: bigint; totalAttempts: bigint; streak: bigint; lastActivityDay: bigint; coinsEarned: bigint; registeredAt: bigint; exists: boolean; }
+export interface LeaderboardEntry { player: string; username: string; totalScore: bigint; streak: bigint; }
+
+function errorMessage(error: unknown, fallback: string): string {
+  if (isUserRejectedError(error)) return 'Request rejected. Approve the wallet request, then reconnect.';
+  return error instanceof Error && error.message ? error.message : fallback;
+}
 
 export function useContract() {
-  const [provider, setProvider]   = useState<BrowserProvider | null>(null);
-  const [contract, setContract]   = useState<Contract | null>(null);
-  const [address, setAddress]     = useState<string | null>(null);
-  const [player, setPlayer]       = useState<OnChainPlayer | null>(null);
-  const [loading, setLoading]     = useState(false);
-  const [error, setError]         = useState<string | null>(null);
+  const [provider, setProvider] = useState<BrowserProvider | null>(null);
+  const [contract, setContract] = useState<Contract | null>(null);
+  const [address, setAddress] = useState<string | null>(null);
+  const [player, setPlayer] = useState<OnChainPlayer | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [connected, setConnected] = useState(false);
+  const ethereumRef = useRef<EthereumProvider | null>(null);
 
-  // Connect wallet
-  const connect = useCallback(async () => {
-    if (typeof window === 'undefined' || !window.ethereum) {
-      setError('No wallet found. Install MetaMask or Celo Wallet.');
-      return;
-    }
-    if (!deploymentData) {
-      setError('Contract not deployed yet.');
-      return;
-    }
-
-    try {
-      setLoading(true);
-      setError(null);
-
-      const web3Provider = new BrowserProvider(window.ethereum);
-
-      // Switch to Celo Alfajores
-      try {
-        await window.ethereum.request({
-          method: 'wallet_switchEthereumChain',
-          params: [{ chainId: CELO_ALFAJORES.chainId }],
-        });
-      } catch (switchErr: unknown) {
-        if ((switchErr as { code: number }).code === 4902) {
-          await window.ethereum.request({
-            method: 'wallet_addEthereumChain',
-            params: [CELO_ALFAJORES],
-          });
-        }
-      }
-
-      const accounts = await web3Provider.send('eth_requestAccounts', []);
-      const signer   = await web3Provider.getSigner();
-      const gameContract = new Contract(deploymentData.address, deploymentData.abi as ethers.InterfaceAbi, signer);
-
-      setProvider(web3Provider);
-      setContract(gameContract);
-      setAddress(accounts[0]);
-      setConnected(true);
-
-      // Load player data
-      const p: OnChainPlayer = await gameContract.getPlayer(accounts[0]);
-      if (p.exists) setPlayer(p);
-    } catch (err: unknown) {
-      setError((err as Error).message || 'Connection failed');
-    } finally {
-      setLoading(false);
-    }
+  const clearConnection = useCallback((message?: string) => {
+    setProvider(null); setContract(null); setAddress(null); setPlayer(null); setConnected(false);
+    if (message) setError(message);
   }, []);
 
-  // Register on-chain
+  const connect = useCallback(async () => {
+    const ethereum = typeof window !== 'undefined' ? window.ethereum : undefined;
+    if (!ethereum) { setError('No wallet found. Install MetaMask or Celo Wallet.'); return; }
+    if (!deploymentData) { setError('Contract not deployed yet.'); return; }
+    try {
+      assertSupportedDeployment(deploymentData.chainId, deploymentData.address);
+      setLoading(true); setError(null);
+      const expectedNetwork = getCeloNetwork(deploymentData.chainId);
+      if (!expectedNetwork) throw new Error(networkRecoveryMessage(deploymentData.chainId));
+      const web3Provider = new BrowserProvider(ethereum);
+      let walletNetwork = await web3Provider.getNetwork();
+      if (Number(walletNetwork.chainId) !== deploymentData.chainId) {
+        try {
+          await ethereum.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: toWalletChainConfig(expectedNetwork).chainId }] });
+        } catch (switchError: unknown) {
+          if (isUnknownChainError(switchError)) {
+            await ethereum.request({ method: 'wallet_addEthereumChain', params: [toWalletChainConfig(expectedNetwork)] });
+          } else throw switchError;
+        }
+        walletNetwork = await web3Provider.getNetwork();
+      }
+      if (Number(walletNetwork.chainId) !== deploymentData.chainId) throw new Error(networkRecoveryMessage(deploymentData.chainId, Number(walletNetwork.chainId)));
+      assertContractBytecode(await web3Provider.getCode(deploymentData.address), deploymentData.address, expectedNetwork.chainName);
+      const accounts = await web3Provider.send('eth_requestAccounts', []) as string[];
+      const account = accounts[0];
+      if (!account) throw new Error('No wallet account selected. Connect an account, then retry.');
+      const signer = await web3Provider.getSigner(account);
+      const gameContract = new Contract(deploymentData.address, deploymentData.abi as ethers.InterfaceAbi, signer);
+      const nextPlayer: OnChainPlayer = await gameContract.getPlayer(account);
+      ethereumRef.current = ethereum;
+      setProvider(web3Provider); setContract(gameContract); setAddress(account); setPlayer(nextPlayer.exists ? nextPlayer : null); setConnected(true);
+    } catch (err: unknown) { clearConnection(errorMessage(err, 'Connection failed.')); }
+    finally { setLoading(false); }
+  }, [clearConnection]);
+
+  const refreshAccount = useCallback(async (account: string) => {
+    if (!provider || !contract || !deploymentData) return;
+    try {
+      const network = await provider.getNetwork();
+      if (Number(network.chainId) !== deploymentData.chainId) { clearConnection(networkRecoveryMessage(deploymentData.chainId, Number(network.chainId))); return; }
+      const nextContract = new Contract(deploymentData.address, deploymentData.abi as ethers.InterfaceAbi, await provider.getSigner(account));
+      const nextPlayer: OnChainPlayer = await nextContract.getPlayer(account);
+      setContract(nextContract); setAddress(account); setPlayer(nextPlayer.exists ? nextPlayer : null); setConnected(true); setError(null);
+    } catch (err: unknown) { clearConnection(errorMessage(err, 'Unable to refresh wallet account. Reconnect and retry.')); }
+  }, [clearConnection, contract, provider]);
+
+  useEffect(() => {
+    const ethereum = ethereumRef.current ?? (typeof window !== 'undefined' ? window.ethereum : undefined);
+    if (!ethereum?.on) return;
+    const onChainChanged: EthereumEventHandler = () => clearConnection(deploymentData ? networkRecoveryMessage(deploymentData.chainId) : 'Contract deployment is unavailable.');
+    const onAccountsChanged: EthereumEventHandler = (accountsArg) => { const accounts = accountsArg as string[]; if (!accounts?.[0]) clearConnection('Wallet disconnected. Connect an account, then retry.'); else void refreshAccount(accounts[0]); };
+    ethereum.on('chainChanged', onChainChanged); ethereum.on('accountsChanged', onAccountsChanged);
+    return () => { ethereum.removeListener?.('chainChanged', onChainChanged); ethereum.removeListener?.('accountsChanged', onAccountsChanged); };
+  }, [clearConnection, refreshAccount]);
+
   const register = useCallback(async (username: string) => {
-    if (!contract) return;
-    setLoading(true);
-    try {
-      const tx = await contract.register(username);
-      await tx.wait();
-      const p: OnChainPlayer = await contract.getPlayer(address!);
-      setPlayer(p);
-    } catch (err: unknown) {
-      setError((err as Error).message);
-    } finally {
-      setLoading(false);
-    }
-  }, [contract, address]);
+    if (!contract || !address || !connected) return; setLoading(true);
+    try { const tx = await contract.register(username); await tx.wait(); setPlayer(await contract.getPlayer(address)); }
+    catch (err: unknown) { setError(errorMessage(err, 'Registration failed.')); } finally { setLoading(false); }
+  }, [address, connected, contract]);
 
-  // Record game session on-chain
-  const recordActivity = useCallback(async (
-    score: number,
-    correct: number,
-    attempts: number,
-    topic: string
-  ) => {
-    if (!contract || !player?.exists) return;
-    setLoading(true);
-    try {
-      const tx = await contract.recordActivity(score, correct, attempts, topic, { gasLimit: 300000 });
-      await tx.wait();
-      const p: OnChainPlayer = await contract.getPlayer(address!);
-      setPlayer(p);
-    } catch (err: unknown) {
-      setError((err as Error).message);
-    } finally {
-      setLoading(false);
-    }
-  }, [contract, player, address]);
+  const recordActivity = useCallback(async (score: number, correct: number, attempts: number, topic: string) => {
+    if (!contract || !address || !player?.exists || !connected) return; setLoading(true);
+    try { const tx = await contract.recordActivity(score, correct, attempts, topic, { gasLimit: 300000 }); await tx.wait(); setPlayer(await contract.getPlayer(address)); }
+    catch (err: unknown) { setError(errorMessage(err, 'Saving activity failed.')); } finally { setLoading(false); }
+  }, [address, connected, contract, player]);
 
-  // Claim CELO reward
   const claimReward = useCallback(async () => {
-    if (!contract) return;
-    setLoading(true);
-    try {
-      const tx = await contract.claimCeloReward({ gasLimit: 200000 });
-      await tx.wait();
-      const p: OnChainPlayer = await contract.getPlayer(address!);
-      setPlayer(p);
-    } catch (err: unknown) {
-      setError((err as Error).message);
-    } finally {
-      setLoading(false);
-    }
-  }, [contract, address]);
+    if (!contract || !address || !connected) return; setLoading(true);
+    try { const tx = await contract.claimCeloReward({ gasLimit: 200000 }); await tx.wait(); setPlayer(await contract.getPlayer(address)); }
+    catch (err: unknown) { setError(errorMessage(err, 'Claim failed.')); } finally { setLoading(false); }
+  }, [address, connected, contract]);
 
-  // Fetch leaderboard
   const getLeaderboard = useCallback(async (topN = 10): Promise<LeaderboardEntry[]> => {
-    if (!contract) return [];
-    try {
-      return await contract.getLeaderboard(topN);
-    } catch {
-      return [];
-    }
-  }, [contract]);
+    if (!contract || !connected) return [];
+    try { return await contract.getLeaderboard(topN); } catch { return []; }
+  }, [connected, contract]);
 
-  const isDeployed = !!deploymentData;
-  const contractAddress = deploymentData?.address ?? null;
-
-  return {
-    connect, register, recordActivity, claimReward, getLeaderboard,
-    provider, contract, address, player, loading, error, connected,
-    isDeployed, contractAddress,
-  };
+  const network = deploymentData ? getCeloNetwork(deploymentData.chainId) : null;
+  return { connect, register, recordActivity, claimReward, getLeaderboard, provider, contract, address, player, loading, error, connected, isDeployed: !!deploymentData, contractAddress: deploymentData?.address ?? null, chainId: deploymentData?.chainId ?? null, networkName: network?.chainName ?? null, explorerUrl: deploymentData && network ? `${network.blockExplorerUrl}/address/${deploymentData.address}` : null };
 }
