@@ -1,10 +1,11 @@
 'use client';
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { useAppStore, getActiveProfile } from '@/lib/store';
 import { generateQuestion } from '@/lib/questionEngine';
 import { getTutorMessage } from '@/lib/aiTutor';
 import { BADGES, speak } from '@/lib/data';
 import { Operation } from '@/lib/types';
+import { useSessionSubmit } from '@/lib/useSessionSubmit';
 import QuestionCard from './QuestionCard';
 import ScoreScreen from './ScoreScreen';
 import Mascot from '@/components/ui/Mascot';
@@ -22,6 +23,7 @@ export default function ChallengeMode({ operation }: ChallengeModeProps) {
   const store = useAppStore();
   const profile = useAppStore(getActiveProfile);
   const tutorState = useAppStore(s => profile ? (s.tutorStates[profile.id] ?? null) : null);
+  const { submitSession, submitStatus, lastError, retry } = useSessionSubmit();
 
   const [score, setScore] = useState(0);
   const [total, setTotal] = useState(0);
@@ -34,6 +36,8 @@ export default function ChallengeMode({ operation }: ChallengeModeProps) {
     generateQuestion(operation, tutorState?.currentDifficulty ?? 1)
   );
   const [timerKey, setTimerKey] = useState(0);
+  const submittedRef = useRef(false);
+  const finalScoreRef = useRef({ score: 0, total: 0 });
 
   const handleExpire = useCallback(() => {
     setDone(true);
@@ -49,7 +53,6 @@ export default function ChallengeMode({ operation }: ChallengeModeProps) {
       store.addReward(profile.id, 8, 1);
       setScore(s => s + 1);
       setMascotMood('excited');
-      // speed badge
       if (timeMs < 3000) {
         const badge = BADGES.find(b => b.id === 'speed-demon');
         if (badge && !profile.badges.find(b => b.id === badge.id)) {
@@ -73,7 +76,30 @@ export default function ChallengeMode({ operation }: ChallengeModeProps) {
     }, 400);
   }, [question, done, profile, operation, store]);
 
+  useEffect(() => {
+    if (done) {
+      finalScoreRef.current = { score, total };
+    }
+  }, [done, score, total]);
+
+  useEffect(() => {
+    if (done && profile && !submittedRef.current) {
+      submittedRef.current = true;
+      const { score: finalScore, total: finalTotal } = finalScoreRef.current;
+      submitSession({
+        mode: 'challenge',
+        topic: operation,
+        score: finalScore,
+        correct: finalScore,
+        attempts: finalTotal,
+        profileId: profile.id,
+      });
+    }
+  }, [done, profile, operation, submitSession]);
+
   function restart() {
+    submittedRef.current = false;
+    finalScoreRef.current = { score: 0, total: 0 };
     setScore(0); setTotal(0); setDone(false); setStarted(false);
     setNewBadge(null); setMascotMood('idle');
     setMascotMsg('Answer as many as you can! ⚡');
@@ -91,7 +117,9 @@ export default function ChallengeMode({ operation }: ChallengeModeProps) {
           score={score} total={total}
           coinsEarned={score * 8} starsEarned={score}
           onPlayAgain={restart} newBadge={newBadge}
-        />
+        >
+          <SubmissionStatus status={submitStatus} error={lastError} onRetry={retry} />
+        </ScoreScreen>
       )}
 
       <div className="max-w-md mx-auto space-y-4">
@@ -130,6 +158,32 @@ export default function ChallengeMode({ operation }: ChallengeModeProps) {
           <QuestionCard question={question} onAnswer={handleAnswer} disabled={done} />
         )}
       </div>
+    </div>
+  );
+}
+
+function SubmissionStatus({ status, error, onRetry }: { status: string; error: string | null; onRetry: () => void }) {
+  if (status === 'confirmed' || status === 'idle' || status === 'not-connected') return null;
+
+  return (
+    <div className="mt-3 text-center">
+      {status === 'pending' && (
+        <p className="text-xs text-blue-600 font-bold">Syncing to blockchain...</p>
+      )}
+      {status === 'rejected' && (
+        <div className="space-y-1">
+          <p className="text-xs text-red-600 font-bold">On-chain sync failed{error ? `: ${error}` : ''}</p>
+          <button onClick={onRetry} className="text-xs text-white bg-red-500 rounded px-3 py-1 font-bold">Retry</button>
+        </div>
+      )}
+      {status === 'wrong-network' && (
+        <div className="space-y-1">
+          <p className="text-xs text-orange-600 font-bold">Wrong network</p>
+        </div>
+      )}
+      {status === 'not-registered' && (
+        <p className="text-xs text-yellow-600 font-bold">Register on-chain from the dashboard to sync scores.</p>
+      )}
     </div>
   );
 }

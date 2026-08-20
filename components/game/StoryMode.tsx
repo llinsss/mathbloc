@@ -1,10 +1,11 @@
 'use client';
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { useAppStore, getActiveProfile } from '@/lib/store';
 import { generateQuestion } from '@/lib/questionEngine';
 import { getTutorMessage, shouldShowHint } from '@/lib/aiTutor';
 import { STORY_CHAPTERS, BADGES, speak } from '@/lib/data';
 import { Operation } from '@/lib/types';
+import { useSessionSubmit } from '@/lib/useSessionSubmit';
 import QuestionCard from './QuestionCard';
 import ScoreScreen from './ScoreScreen';
 import Mascot from '@/components/ui/Mascot';
@@ -18,6 +19,7 @@ export default function StoryMode() {
   const store = useAppStore();
   const profile = useAppStore(getActiveProfile);
   const tutorState = useAppStore(s => profile ? (s.tutorStates[profile.id] ?? null) : null);
+  const { submitSession, submitStatus, lastError, retry } = useSessionSubmit();
 
   const [selectedChapter, setSelectedChapter] = useState<number | null>(null);
   const [qIndex, setQIndex] = useState(0);
@@ -27,12 +29,16 @@ export default function StoryMode() {
   const [mascotMsg, setMascotMsg] = useState('');
   const [newBadge, setNewBadge] = useState<{ name: string; emoji: string } | null>(null);
   const [question, setQuestion] = useState<ReturnType<typeof generateQuestion> | null>(null);
+  const submittedRef = useRef(false);
+  const chapterRef = useRef<number | null>(null);
 
   const chapter = selectedChapter !== null ? STORY_CHAPTERS[selectedChapter - 1] : null;
 
   function startChapter(chapterId: number) {
+    submittedRef.current = false;
     const ch = STORY_CHAPTERS[chapterId - 1];
     setSelectedChapter(chapterId);
+    chapterRef.current = chapterId;
     setQIndex(0); setScore(0); setDone(false); setNewBadge(null);
     setMascotMood('idle');
     setMascotMsg(`Welcome to ${ch.title}! ${ch.description}`);
@@ -76,9 +82,24 @@ export default function StoryMode() {
     }
   }, [question, score, qIndex, profile, chapter, store]);
 
+  useEffect(() => {
+    if (done && profile && !submittedRef.current) {
+      submittedRef.current = true;
+      const ch = chapterRef.current !== null ? STORY_CHAPTERS[chapterRef.current - 1] : null;
+      const topic = (ch?.operations[0] as Operation) ?? 'addition';
+      submitSession({
+        mode: 'story',
+        topic,
+        score,
+        correct: score,
+        attempts: QUESTIONS_PER_CHAPTER,
+        profileId: profile.id,
+      });
+    }
+  }, [done, profile, score, submitSession]);
+
   if (!profile) return <div className="text-center p-8 text-gray-500">No profile selected.</div>;
 
-  // ── Chapter selection screen ──
   if (!selectedChapter) {
     return (
       <div className="min-h-screen bg-gradient-to-b from-green-100 to-teal-100 p-4">
@@ -127,7 +148,6 @@ export default function StoryMode() {
     );
   }
 
-  // ── Active chapter screen ──
   return (
     <div className="min-h-screen bg-gradient-to-b from-green-100 to-teal-100 p-4">
       {done && (
@@ -136,7 +156,9 @@ export default function StoryMode() {
           coinsEarned={score * 10} starsEarned={score * 2}
           onPlayAgain={() => startChapter(selectedChapter)}
           newBadge={newBadge}
-        />
+        >
+          <SubmissionStatus status={submitStatus} error={lastError} onRetry={retry} />
+        </ScoreScreen>
       )}
       <div className="max-w-md mx-auto space-y-4">
         <div className="flex items-center gap-2">
@@ -165,6 +187,32 @@ export default function StoryMode() {
           />
         )}
       </div>
+    </div>
+  );
+}
+
+function SubmissionStatus({ status, error, onRetry }: { status: string; error: string | null; onRetry: () => void }) {
+  if (status === 'confirmed' || status === 'idle' || status === 'not-connected') return null;
+
+  return (
+    <div className="mt-3 text-center">
+      {status === 'pending' && (
+        <p className="text-xs text-blue-600 font-bold">Syncing to blockchain...</p>
+      )}
+      {status === 'rejected' && (
+        <div className="space-y-1">
+          <p className="text-xs text-red-600 font-bold">On-chain sync failed{error ? `: ${error}` : ''}</p>
+          <button onClick={onRetry} className="text-xs text-white bg-red-500 rounded px-3 py-1 font-bold">Retry</button>
+        </div>
+      )}
+      {status === 'wrong-network' && (
+        <div className="space-y-1">
+          <p className="text-xs text-orange-600 font-bold">Wrong network</p>
+        </div>
+      )}
+      {status === 'not-registered' && (
+        <p className="text-xs text-yellow-600 font-bold">Register on-chain from the dashboard to sync scores.</p>
+      )}
     </div>
   );
 }

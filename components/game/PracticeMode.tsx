@@ -1,10 +1,11 @@
 'use client';
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { useAppStore, getActiveProfile } from '@/lib/store';
 import { generateQuestion } from '@/lib/questionEngine';
 import { getTutorMessage, shouldShowHint } from '@/lib/aiTutor';
 import { BADGES, speak } from '@/lib/data';
 import { Operation } from '@/lib/types';
+import { useSessionSubmit } from '@/lib/useSessionSubmit';
 import QuestionCard from './QuestionCard';
 import ScoreScreen from './ScoreScreen';
 import Mascot from '@/components/ui/Mascot';
@@ -21,6 +22,7 @@ export default function PracticeMode({ operation }: PracticeModeProps) {
   const store = useAppStore();
   const profile = useAppStore(getActiveProfile);
   const tutorState = useAppStore(s => profile ? (s.tutorStates[profile.id] ?? null) : null);
+  const { submitSession, submitStatus, lastError, retry } = useSessionSubmit();
 
   const [qIndex, setQIndex] = useState(0);
   const [score, setScore] = useState(0);
@@ -31,6 +33,7 @@ export default function PracticeMode({ operation }: PracticeModeProps) {
   const [question, setQuestion] = useState(() =>
     generateQuestion(operation, tutorState?.currentDifficulty ?? 1)
   );
+  const submittedRef = useRef(false);
 
   const handleAnswer = useCallback((answer: number, timeMs: number, hintsUsed: number) => {
     if (!profile) return;
@@ -51,7 +54,6 @@ export default function PracticeMode({ operation }: PracticeModeProps) {
     setMascotMsg(msg);
     speak(msg);
 
-    // Check badges
     if (qIndex === 0 && correct) {
       const badge = BADGES.find(b => b.id === 'first-correct');
       if (badge && !profile.badges.find(b => b.id === 'first-correct')) {
@@ -85,7 +87,23 @@ export default function PracticeMode({ operation }: PracticeModeProps) {
     }, 800);
   }, [question, score, qIndex, profile, operation, store]);
 
+  useEffect(() => {
+    if (done && profile && !submittedRef.current) {
+      submittedRef.current = true;
+      const finalCorrect = score;
+      submitSession({
+        mode: 'practice',
+        topic: operation,
+        score: finalCorrect,
+        correct: finalCorrect,
+        attempts: QUESTIONS_PER_SESSION,
+        profileId: profile.id,
+      });
+    }
+  }, [done, profile, score, operation, submitSession]);
+
   function restart() {
+    submittedRef.current = false;
     setQIndex(0); setScore(0); setDone(false); setNewBadge(null);
     setMascotMood('idle'); setMascotMsg(`Let's practice ${operation}! 🎯`);
     const t = profile ? store.getTutorState(profile.id) : null;
@@ -104,7 +122,9 @@ export default function PracticeMode({ operation }: PracticeModeProps) {
           score={score} total={QUESTIONS_PER_SESSION}
           coinsEarned={coinsEarned} starsEarned={starsEarned}
           onPlayAgain={restart} newBadge={newBadge}
-        />
+        >
+          <SubmissionStatus status={submitStatus} error={lastError} onRetry={retry} />
+        </ScoreScreen>
       )}
 
       <div className="max-w-md mx-auto space-y-4">
@@ -115,7 +135,6 @@ export default function PracticeMode({ operation }: PracticeModeProps) {
           <HomeButton gameActive={!done} />
         </div>
 
-        {/* Progress dots */}
         <div className="flex justify-center gap-2">
           {Array.from({ length: QUESTIONS_PER_SESSION }).map((_, i) => (
             <div key={i} className={`w-3 h-3 rounded-full border-2 transition-all ${
@@ -134,6 +153,32 @@ export default function PracticeMode({ operation }: PracticeModeProps) {
           showHint={tutorState ? shouldShowHint(tutorState) : false}
         />
       </div>
+    </div>
+  );
+}
+
+function SubmissionStatus({ status, error, onRetry }: { status: string; error: string | null; onRetry: () => void }) {
+  if (status === 'confirmed' || status === 'idle' || status === 'not-connected') return null;
+
+  return (
+    <div className="mt-3 text-center">
+      {status === 'pending' && (
+        <p className="text-xs text-blue-600 font-bold">Syncing to blockchain...</p>
+      )}
+      {status === 'rejected' && (
+        <div className="space-y-1">
+          <p className="text-xs text-red-600 font-bold">On-chain sync failed{error ? `: ${error}` : ''}</p>
+          <button onClick={onRetry} className="text-xs text-white bg-red-500 rounded px-3 py-1 font-bold">Retry</button>
+        </div>
+      )}
+      {status === 'wrong-network' && (
+        <div className="space-y-1">
+          <p className="text-xs text-orange-600 font-bold">Wrong network</p>
+        </div>
+      )}
+      {status === 'not-registered' && (
+        <p className="text-xs text-yellow-600 font-bold">Register on-chain from the dashboard to sync scores.</p>
+      )}
     </div>
   );
 }
