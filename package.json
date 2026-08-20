@@ -12,6 +12,7 @@
     "lint": "eslint",
     "compile": "hardhat compile",
     "test:contracts": "TS_NODE_PROJECT=tsconfig.hardhat.json hardhat test",
+    "test:network": "TS_NODE_PROJECT=tsconfig.json ts-node --compiler-options '{\"module\":\"CommonJS\"}' tests/networkConfig.test.ts",
     "deploy:alfajores": "TS_NODE_PROJECT=tsconfig.hardhat.json hardhat run contracts/scripts/deploy.cjs --network alfajores",
     "deploy:celo": "TS_NODE_PROJECT=tsconfig.hardhat.json hardhat run contracts/scripts/deploy.cjs --network celo",
     "daily": "node contracts/scripts/daily-activity.cjs"

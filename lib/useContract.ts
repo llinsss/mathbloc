@@ -1,6 +1,7 @@
-import { useState, useCallback } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ethers, BrowserProvider, Contract } from 'ethers';
 import contractDeployment from './contract.json';
+import { assertContractBytecode, assertSupportedDeployment, getCeloNetwork, isUnknownChainError, isUserRejectedError, networkRecoveryMessage, toWalletChainConfig } from './networkConfig';
 
 declare global {
   interface Window {
@@ -16,23 +17,12 @@ const deploymentData: { address: string; abi: unknown[]; chainId: number } | nul
     ? (contractDeployment as { address: string; abi: unknown[]; chainId: number })
     : null;
 
-export interface OnChainPlayer {
-  username: string;
-  totalScore: bigint;
-  totalCorrect: bigint;
-  totalAttempts: bigint;
-  streak: bigint;
-  lastActivityDay: bigint;
-  coinsEarned: bigint;
-  registeredAt: bigint;
-  exists: boolean;
-}
+export interface OnChainPlayer { username: string; totalScore: bigint; totalCorrect: bigint; totalAttempts: bigint; streak: bigint; lastActivityDay: bigint; coinsEarned: bigint; registeredAt: bigint; exists: boolean; }
+export interface LeaderboardEntry { player: string; username: string; totalScore: bigint; streak: bigint; }
 
-export interface LeaderboardEntry {
-  player: string;
-  username: string;
-  totalScore: bigint;
-  streak: bigint;
+function errorMessage(error: unknown, fallback: string): string {
+  if (isUserRejectedError(error)) return 'Request rejected. Approve the wallet request, then reconnect.';
+  return error instanceof Error && error.message ? error.message : fallback;
 }
 
 const CELO_ALFAJORES = {
@@ -104,6 +94,10 @@ export function useContract() {
       return;
     }
 
+  const connect = useCallback(async () => {
+    const ethereum = typeof window !== 'undefined' ? window.ethereum : undefined;
+    if (!ethereum) { setError('No wallet found. Install MetaMask or Celo Wallet.'); return; }
+    if (!deploymentData) { setError('Contract not deployed yet.'); return; }
     try {
       setLoading(true);
       setError(null);
@@ -126,6 +120,7 @@ export function useContract() {
         } else {
           throw switchErr;
         }
+        walletNetwork = await web3Provider.getNetwork();
       }
 
       const accounts = await web3Provider.send('eth_requestAccounts', []);
@@ -183,19 +178,10 @@ export function useContract() {
   }, [address]);
 
   const register = useCallback(async (username: string) => {
-    if (!contract) return;
-    setLoading(true);
-    try {
-      const tx = await contract.register(username);
-      await tx.wait();
-      const p: OnChainPlayer = await contract.getPlayer(address!);
-      setPlayer(p);
-    } catch (err: unknown) {
-      setError((err as Error).message);
-    } finally {
-      setLoading(false);
-    }
-  }, [contract, address]);
+    if (!contract || !address || !connected) return; setLoading(true);
+    try { const tx = await contract.register(username); await tx.wait(); setPlayer(await contract.getPlayer(address)); }
+    catch (err: unknown) { setError(errorMessage(err, 'Registration failed.')); } finally { setLoading(false); }
+  }, [address, connected, contract]);
 
   const recordActivity = useCallback(async (
     score: number,
@@ -218,31 +204,15 @@ export function useContract() {
   }, [contract, player, address]);
 
   const claimReward = useCallback(async () => {
-    if (!contract) return;
-    setLoading(true);
-    try {
-      const tx = await contract.claimCeloReward({ gasLimit: 200000 });
-      await tx.wait();
-      const p: OnChainPlayer = await contract.getPlayer(address!);
-      setPlayer(p);
-    } catch (err: unknown) {
-      setError((err as Error).message);
-    } finally {
-      setLoading(false);
-    }
-  }, [contract, address]);
+    if (!contract || !address || !connected) return; setLoading(true);
+    try { const tx = await contract.claimCeloReward({ gasLimit: 200000 }); await tx.wait(); setPlayer(await contract.getPlayer(address)); }
+    catch (err: unknown) { setError(errorMessage(err, 'Claim failed.')); } finally { setLoading(false); }
+  }, [address, connected, contract]);
 
   const getLeaderboard = useCallback(async (topN = 10): Promise<LeaderboardEntry[]> => {
-    if (!contract) return [];
-    try {
-      return await contract.getLeaderboard(topN);
-    } catch {
-      return [];
-    }
-  }, [contract]);
-
-  const isDeployed = !!deploymentData;
-  const contractAddress = deploymentData?.address ?? null;
+    if (!contract || !connected) return [];
+    try { return await contract.getLeaderboard(topN); } catch { return []; }
+  }, [connected, contract]);
 
   return {
     connect, register, recordActivity, claimReward, getLeaderboard, refreshPlayer,
