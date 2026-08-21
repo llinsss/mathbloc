@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useState } from 'react';
 import { ethers, BrowserProvider, Contract } from 'ethers';
 import contractDeployment from './contract.json';
-import { assertContractBytecode, assertSupportedDeployment, getCeloNetwork, isUnknownChainError, isUserRejectedError, networkRecoveryMessage, toWalletChainConfig } from './networkConfig';
+import { isUserRejectedError } from './networkConfig';
 
 declare global {
   interface Window {
@@ -85,16 +85,6 @@ export function useContract() {
   }, [contract, address]);
 
   const connect = useCallback(async () => {
-    if (typeof window === 'undefined' || !window.ethereum) {
-      setError('No wallet found. Install MetaMask or Celo Wallet.');
-      return;
-    }
-    if (!deploymentData) {
-      setError('Contract not deployed yet.');
-      return;
-    }
-
-  const connect = useCallback(async () => {
     const ethereum = typeof window !== 'undefined' ? window.ethereum : undefined;
     if (!ethereum) { setError('No wallet found. Install MetaMask or Celo Wallet.'); return; }
     if (!deploymentData) { setError('Contract not deployed yet.'); return; }
@@ -102,25 +92,24 @@ export function useContract() {
       setLoading(true);
       setError(null);
 
-      const web3Provider = new BrowserProvider(window.ethereum);
+      const web3Provider = new BrowserProvider(ethereum);
 
       const targetNetwork = NETWORK_CONFIGS[DEPLOYMENT_CHAIN_ID] ?? CELO_MAINNET;
 
       try {
-        await window.ethereum.request({
+        await ethereum.request({
           method: 'wallet_switchEthereumChain',
           params: [{ chainId: targetNetwork.chainId }],
         });
       } catch (switchErr: unknown) {
         if ((switchErr as { code: number }).code === 4902) {
-          await window.ethereum.request({
+          await ethereum.request({
             method: 'wallet_addEthereumChain',
             params: [targetNetwork],
           });
         } else {
           throw switchErr;
         }
-        walletNetwork = await web3Provider.getNetwork();
       }
 
       const accounts = await web3Provider.send('eth_requestAccounts', []);
@@ -213,6 +202,9 @@ export function useContract() {
     if (!contract || !connected) return [];
     try { return await contract.getLeaderboard(topN); } catch { return []; }
   }, [connected, contract]);
+
+  const isDeployed = Boolean(deploymentData);
+  const contractAddress = deploymentData?.address ?? null;
 
   return {
     connect, register, recordActivity, claimReward, getLeaderboard, refreshPlayer,

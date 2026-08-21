@@ -148,6 +148,7 @@ export default function PracticeMode({ operation }: PracticeModeProps) {
         <Mascot mood={mascotMood} message={mascotMsg} size="sm" />
 
         <QuestionCard
+          key={question.id}
           question={question}
           onAnswer={handleAnswer}
           showHint={tutorState ? shouldShowHint(tutorState) : false}

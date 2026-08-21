@@ -20,7 +20,7 @@ export default function Mascot({ mood, message, size = 'md' }: MascotProps) {
   return (
     <div className="flex flex-col items-center gap-2">
       <div className={`${SIZES[size]} ${MOOD_CLASSES[mood]} select-none`}>
-        {mood === 'happy' || mood === 'excited' ? '🦉' : mood === 'sad' ? '🦉' : '🦉'}
+        🦉
         {mood === 'happy' && <span className="text-2xl absolute -mt-2 -mr-2">✨</span>}
       </div>
       {message && (

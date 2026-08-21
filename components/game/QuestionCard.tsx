@@ -10,7 +10,15 @@ interface QuestionCardProps {
   disabled?: boolean;
 }
 
-export default function QuestionCard({ question, onAnswer, showHint, disabled }: QuestionCardProps) {
+function monotonicNow(): number {
+  return performance.now();
+}
+
+export default function QuestionCard(props: QuestionCardProps) {
+  return <QuestionCardContent key={props.question.id} {...props} />;
+}
+
+function QuestionCardContent({ question, onAnswer, showHint, disabled }: QuestionCardProps) {
   const [selected, setSelected] = useState<number | null>(null);
   /**
    * Monotonic start timestamp, recorded via performance.now() and reset on every
@@ -26,7 +34,7 @@ export default function QuestionCard({ question, onAnswer, showHint, disabled }:
    *  - timeMs is captured at the moment the user clicks an answer. The 600 ms
    *    feedback animation that fires afterward does NOT inflate timeMs.
    */
-  const startTimeRef = useRef<number>(performance.now());
+  const startTimeRef = useRef(0);
   const [hintsUsed, setHintsUsed] = useState(0);
   const [hintVisible, setHintVisible] = useState(false);
   const [shake, setShake] = useState(false);
@@ -35,10 +43,7 @@ export default function QuestionCard({ question, onAnswer, showHint, disabled }:
   // This effect runs synchronously after the commit phase, before the user
   // can interact, so no time leaks between consecutive questions.
   useEffect(() => {
-    startTimeRef.current = performance.now();
-    setSelected(null);
-    setHintsUsed(0);
-    setHintVisible(false);
+    startTimeRef.current = monotonicNow();
     speak(question.prompt);
   }, [question.id, question.prompt]);
 
@@ -46,7 +51,7 @@ export default function QuestionCard({ question, onAnswer, showHint, disabled }:
     if (disabled || selected !== null) return;
     setSelected(choice);
     // Capture elapsed time at the exact moment of interaction.
-    const timeMs = Math.round(performance.now() - startTimeRef.current);
+    const timeMs = Math.round(monotonicNow() - startTimeRef.current);
     if (choice !== question.answer) {
       setShake(true);
       setTimeout(() => setShake(false), 600);

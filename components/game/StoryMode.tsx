@@ -181,6 +181,7 @@ export default function StoryMode() {
 
         {question && (
           <QuestionCard
+            key={question.id}
             question={question}
             onAnswer={handleAnswer}
             showHint={tutorState ? shouldShowHint(tutorState) : false}

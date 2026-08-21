@@ -11,6 +11,8 @@ export default defineConfig({
     exclude: [
       // Hardhat/Mocha contract tests — run these with `npm run test:contracts`
       'contracts/test/**',
+      // Standalone Node assertions — run these with `npm run test:network`
+      'tests/networkConfig.test.ts',
       '**/node_modules/**',
     ],
   },
