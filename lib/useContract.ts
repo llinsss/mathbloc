@@ -181,7 +181,10 @@ export function useContract() {
     if (!contract || !player?.exists) return;
     setLoading(true);
     try {
-      const tx = await contract.recordActivity(score, correct, attempts, topic, { gasLimit: 300000 });
+      // Pass deadline=0 and empty signature when no session signer is configured.
+      // When a backend attestation service is deployed, this should be replaced with
+      // a fetch to the signer API that returns { deadline, signature }.
+      const tx = await contract.recordActivity(score, correct, attempts, topic, 0, "0x", { gasLimit: 400000 });
       await tx.wait();
       const p: OnChainPlayer = await contract.getPlayer(address!);
       setPlayer(p);

@@ -3,13 +3,24 @@ pragma solidity ^0.8.24;
 
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/utils/Pausable.sol";
+import "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
+import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 
 /**
  * @title MathBlocGame
  * @notice Educational math game contract deployed on Celo.
  *         Tracks daily activity, scores, streaks, and distributes CELO rewards.
+ *
+ *         Security model:
+ *         - Session results require an EIP-712 signature from a trusted signer
+ *           (when sessionSigner != address(0)), preventing forged on-chain submissions.
+ *         - Daily base reward is awarded at most once per player per day.
+ *         - Input bounds enforce sane score/attempt ranges.
+ *         - Per-player nonces prevent replay attacks.
+ *         - Emergency pause halts all activity recording and claims.
  */
-contract MathBlocGame is Ownable, ReentrancyGuard {
+contract MathBlocGame is Ownable, ReentrancyGuard, Pausable, EIP712 {
 
     // ─── Structs ────────────────────────────────────────────────────────────
 
@@ -40,7 +51,23 @@ contract MathBlocGame is Ownable, ReentrancyGuard {
         uint256 streak;
     }
 
-    // ─── State ───────────────────────────────────────────────────────────────
+    // ─── Constants ──────────────────────────────────────────────────────────
+
+    uint256 public constant DAILY_REWARD_COINS   = 10;
+    uint256 public constant STREAK_BONUS_COINS   = 5;   // extra per streak milestone (every 7 days)
+    uint256 public constant PERFECT_SCORE_BONUS  = 20;
+    uint256 public constant CELO_REWARD_THRESHOLD = 100; // coins needed to claim CELO
+    uint256 public constant CELO_REWARD_AMOUNT   = 0.001 ether; // 0.001 CELO per claim
+    uint256 public constant MAX_ATTEMPTS_PER_SESSION = 100;
+    uint256 public constant MAX_SCORE_PER_SESSION = 1000;
+    uint256 public constant MAX_SESSIONS_PER_DAY  = 10;
+
+    // EIP-712 type hash for session attestation
+    bytes32 public constant SESSION_TYPEHASH = keccak256(
+        "Session(address player,uint256 score,uint256 correct,uint256 attempts,string topic,uint256 nonce,uint256 deadline)"
+    );
+
+    // ─── State ──────────────────────────────────────────────────────────────
 
     mapping(address => Player) public players;
     mapping(address => DailyActivity[]) public activityHistory;
@@ -48,16 +75,22 @@ contract MathBlocGame is Ownable, ReentrancyGuard {
 
     address[] public registeredPlayers;
 
-    uint256 public constant DAILY_REWARD_COINS   = 10;
-    uint256 public constant STREAK_BONUS_COINS   = 5;   // extra per streak milestone (every 7 days)
-    uint256 public constant PERFECT_SCORE_BONUS  = 20;
-    uint256 public constant CELO_REWARD_THRESHOLD = 100; // coins needed to claim CELO
-    uint256 public constant CELO_REWARD_AMOUNT   = 0.001 ether; // 0.001 CELO per claim
-
     uint256 public totalActiveDays;   // global stat
     uint256 public rewardPool;        // CELO deposited by owner for rewards
 
-    // ─── Events ──────────────────────────────────────────────────────────────
+    /// @notice Trusted signer for session attestations. When address(0), signatures are not required.
+    address public sessionSigner;
+
+    /// @notice Per-player nonce for replay protection.
+    mapping(address => uint256) public nonces;
+
+    /// @notice Tracks whether the daily base reward has been claimed for a player on a given day.
+    mapping(address => mapping(uint256 => bool)) public dailyRewardClaimed;
+
+    /// @notice Number of sessions recorded per player per day.
+    mapping(address => mapping(uint256 => uint256)) public dailySessionCount;
+
+    // ─── Events ─────────────────────────────────────────────────────────────
 
     event PlayerRegistered(address indexed player, string username, uint256 timestamp);
     event ActivityRecorded(address indexed player, string topic, uint256 score, uint256 correct, uint256 attempts, uint256 day);
@@ -65,24 +98,25 @@ contract MathBlocGame is Ownable, ReentrancyGuard {
     event CoinsEarned(address indexed player, uint256 amount, string reason);
     event CeloClaimed(address indexed player, uint256 amount);
     event RewardPoolFunded(uint256 amount);
+    event SessionSignerUpdated(address indexed oldSigner, address indexed newSigner);
 
-    // ─── Modifiers ───────────────────────────────────────────────────────────
+    // ─── Modifiers ──────────────────────────────────────────────────────────
 
     modifier onlyRegistered() {
         require(players[msg.sender].exists, "Not registered");
         _;
     }
 
-    // ─── Constructor ─────────────────────────────────────────────────────────
+    // ─── Constructor ────────────────────────────────────────────────────────
 
-    constructor() Ownable(msg.sender) {}
+    constructor() Ownable(msg.sender) EIP712("MathBlocGame", "2") {}
 
-    // ─── Registration ────────────────────────────────────────────────────────
+    // ─── Registration ───────────────────────────────────────────────────────
 
     /**
      * @notice Register a new player wallet with a username.
      */
-    function register(string calldata username) external {
+    function register(string calldata username) external whenNotPaused {
         require(!players[msg.sender].exists, "Already registered");
         require(bytes(username).length > 0 && bytes(username).length <= 32, "Invalid username");
 
@@ -102,32 +136,65 @@ contract MathBlocGame is Ownable, ReentrancyGuard {
         emit PlayerRegistered(msg.sender, username, block.timestamp);
     }
 
-    // ─── Daily Activity ──────────────────────────────────────────────────────
+    // ─── Daily Activity ─────────────────────────────────────────────────────
 
     /**
-     * @notice Record a game session result. Can be called once per day per player.
-     * @param score      Total score achieved in the session
+     * @notice Record a game session result with an optional signed attestation.
+     * @param score      Total score achieved in the session (max MAX_SCORE_PER_SESSION)
      * @param correct    Number of correct answers
-     * @param attempts   Total questions attempted
+     * @param attempts   Total questions attempted (max MAX_ATTEMPTS_PER_SESSION)
      * @param topic      Topic played (e.g. "addition", "multiplication")
+     * @param deadline   Attestation expiry timestamp (0 if signer not set)
+     * @param signature  EIP-712 signature from sessionSigner (empty if signer not set)
      */
     function recordActivity(
         uint256 score,
         uint256 correct,
         uint256 attempts,
-        string calldata topic
-    ) external onlyRegistered nonReentrant {
+        string calldata topic,
+        uint256 deadline,
+        bytes calldata signature
+    ) external onlyRegistered nonReentrant whenNotPaused {
+        // ── Input bounds ──
         require(attempts > 0, "No attempts");
+        require(attempts <= MAX_ATTEMPTS_PER_SESSION, "Too many attempts");
         require(correct <= attempts, "Invalid correct count");
-        require(bytes(topic).length > 0, "Topic required");
+        require(score <= MAX_SCORE_PER_SESSION, "Score exceeds maximum");
+        require(bytes(topic).length > 0 && bytes(topic).length <= 32, "Invalid topic");
 
-        Player storage p = players[msg.sender];
         uint256 today = block.timestamp / 1 days;
 
-        // Allow multiple sessions per day but track streak by day
+        // ── Rate limit: max sessions per day ──
+        require(dailySessionCount[msg.sender][today] < MAX_SESSIONS_PER_DAY, "Daily session limit reached");
+
+        // ── Session attestation (when signer is configured) ──
+        if (sessionSigner != address(0)) {
+            require(block.timestamp <= deadline, "Attestation expired");
+
+            uint256 currentNonce = nonces[msg.sender];
+            bytes32 structHash = keccak256(abi.encode(
+                SESSION_TYPEHASH,
+                msg.sender,
+                score,
+                correct,
+                attempts,
+                keccak256(bytes(topic)),
+                currentNonce,
+                deadline
+            ));
+
+            bytes32 digest = _hashTypedDataV4(structHash);
+            address recovered = ECDSA.recover(digest, signature);
+            require(recovered == sessionSigner, "Invalid session signature");
+
+            nonces[msg.sender] = currentNonce + 1;
+        }
+
+        Player storage p = players[msg.sender];
+
+        // Track streak by day (only update on first activity of the day)
         bool firstActivityToday = p.lastActivityDay != today;
 
-        // Update streak
         if (firstActivityToday) {
             if (p.lastActivityDay == today - 1) {
                 p.streak += 1;
@@ -143,6 +210,7 @@ contract MathBlocGame is Ownable, ReentrancyGuard {
         p.totalScore    += score;
         p.totalCorrect  += correct;
         p.totalAttempts += attempts;
+        dailySessionCount[msg.sender][today] += 1;
 
         // Record history
         activityHistory[msg.sender].push(DailyActivity({
@@ -153,36 +221,44 @@ contract MathBlocGame is Ownable, ReentrancyGuard {
             timestamp:   block.timestamp
         }));
 
-        // ── Coin rewards ──
-        uint256 coinsToAward = DAILY_REWARD_COINS;
-        string memory reason = "daily activity";
+        // ── Coin rewards (daily base reward at most once per day) ──
+        uint256 coinsToAward = 0;
+        string memory reason = "session recorded";
 
-        // Streak milestone bonus (every 7 days)
-        if (p.streak > 0 && p.streak % 7 == 0) {
-            coinsToAward += STREAK_BONUS_COINS * (p.streak / 7);
-            reason = "streak milestone";
+        if (!dailyRewardClaimed[msg.sender][today]) {
+            coinsToAward = DAILY_REWARD_COINS;
+            dailyRewardClaimed[msg.sender][today] = true;
+            reason = "daily activity";
+
+            // Streak milestone bonus (every 7 days) — only on the first session of the day
+            if (p.streak > 0 && p.streak % 7 == 0) {
+                coinsToAward += STREAK_BONUS_COINS * (p.streak / 7);
+                reason = "streak milestone";
+            }
         }
 
-        // Perfect score bonus (100% correct)
+        // Perfect score bonus (100% correct, at least 5 questions) — awarded per session
         if (correct == attempts && attempts >= 5) {
             coinsToAward += PERFECT_SCORE_BONUS;
-            reason = "perfect score";
+            reason = coinsToAward > PERFECT_SCORE_BONUS ? "daily + perfect" : "perfect score";
         }
 
-        p.coinsEarned += coinsToAward;
+        if (coinsToAward > 0) {
+            p.coinsEarned += coinsToAward;
+            emit CoinsEarned(msg.sender, coinsToAward, reason);
+        }
 
         emit ActivityRecorded(msg.sender, topic, score, correct, attempts, today);
         emit StreakUpdated(msg.sender, p.streak);
-        emit CoinsEarned(msg.sender, coinsToAward, reason);
     }
 
-    // ─── CELO Reward Claim ───────────────────────────────────────────────────
+    // ─── CELO Reward Claim ──────────────────────────────────────────────────
 
     /**
      * @notice Claim CELO reward when coin balance reaches threshold.
      *         Burns the coins and sends CELO from reward pool.
      */
-    function claimCeloReward() external onlyRegistered nonReentrant {
+    function claimCeloReward() external onlyRegistered nonReentrant whenNotPaused {
         Player storage p = players[msg.sender];
         require(p.coinsEarned >= CELO_REWARD_THRESHOLD, "Not enough coins");
         require(rewardPool >= CELO_REWARD_AMOUNT, "Reward pool empty");
@@ -196,7 +272,7 @@ contract MathBlocGame is Ownable, ReentrancyGuard {
         emit CeloClaimed(msg.sender, CELO_REWARD_AMOUNT);
     }
 
-    // ─── Owner: Fund Reward Pool ─────────────────────────────────────────────
+    // ─── Owner: Administration ──────────────────────────────────────────────
 
     /**
      * @notice Owner deposits CELO into the reward pool.
@@ -216,7 +292,29 @@ contract MathBlocGame is Ownable, ReentrancyGuard {
         require(sent, "Withdraw failed");
     }
 
-    // ─── Views ───────────────────────────────────────────────────────────────
+    /**
+     * @notice Set the trusted session signer. Set to address(0) to disable signature verification.
+     */
+    function setSessionSigner(address _signer) external onlyOwner {
+        emit SessionSignerUpdated(sessionSigner, _signer);
+        sessionSigner = _signer;
+    }
+
+    /**
+     * @notice Pause all activity recording and claims (emergency).
+     */
+    function pause() external onlyOwner {
+        _pause();
+    }
+
+    /**
+     * @notice Unpause the contract.
+     */
+    function unpause() external onlyOwner {
+        _unpause();
+    }
+
+    // ─── Views ──────────────────────────────────────────────────────────────
 
     function getPlayer(address addr) external view returns (Player memory) {
         return players[addr];
@@ -242,12 +340,21 @@ contract MathBlocGame is Ownable, ReentrancyGuard {
         return registeredPlayers.length;
     }
 
+    function getNonce(address addr) external view returns (uint256) {
+        return nonces[addr];
+    }
+
+    function getDailySessionCount(address addr, uint256 day) external view returns (uint256) {
+        return dailySessionCount[addr][day];
+    }
+
     /**
      * @notice Returns top N players sorted by totalScore (simple bubble sort — fine for small sets).
      */
     function getLeaderboard(uint256 topN) external view returns (LeaderboardEntry[] memory) {
         uint256 total = registeredPlayers.length;
         if (topN > total) topN = total;
+        if (total == 0 || topN == 0) return new LeaderboardEntry[](0);
 
         // Copy scores into memory array for sorting
         address[] memory addrs = new address[](total);
@@ -282,6 +389,13 @@ contract MathBlocGame is Ownable, ReentrancyGuard {
      */
     function isActiveToday(address addr) external view returns (bool) {
         return players[addr].lastActivityDay == block.timestamp / 1 days;
+    }
+
+    /**
+     * @notice Returns the EIP-712 domain separator for off-chain signature construction.
+     */
+    function domainSeparator() external view returns (bytes32) {
+        return _domainSeparatorV4();
     }
 
     receive() external payable {
