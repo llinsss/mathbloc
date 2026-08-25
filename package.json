@@ -3,17 +3,20 @@
   "version": "0.1.0",
   "private": true,
   "engines": {
-    "node": ">=20.9.0"
+    "node": ">=20.9.0",
+    "npm": ">=10.0.0"
   },
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
+    "type-check": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "eslint",
     "compile": "hardhat compile",
     "test:contracts": "TS_NODE_PROJECT=tsconfig.hardhat.json hardhat test",
+    "test:coverage": "TS_NODE_PROJECT=tsconfig.hardhat.json hardhat coverage",
     "test:network": "TS_NODE_PROJECT=tsconfig.json ts-node --compiler-options '{\"module\":\"CommonJS\"}' tests/networkConfig.test.ts",
     "deploy:alfajores": "TS_NODE_PROJECT=tsconfig.hardhat.json hardhat run contracts/scripts/deploy.cjs --network alfajores",
     "deploy:celo": "TS_NODE_PROJECT=tsconfig.hardhat.json hardhat run contracts/scripts/deploy.cjs --network celo",
