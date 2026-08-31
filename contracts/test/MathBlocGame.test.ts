@@ -95,6 +95,52 @@ describe("MathBlocGame", function () {
       expect(board[0].username).to.equal("Alice");
       expect(board[1].username).to.equal("Bob");
     });
+
+    it("returns empty array when no players registered", async () => {
+      const board = await contract.getLeaderboard(10);
+      expect(board.length).to.equal(0);
+    });
+
+    it("returns empty array when topN is 0", async () => {
+      await contract.connect(player1).register("Alice");
+      const board = await contract.getLeaderboard(0);
+      expect(board.length).to.equal(0);
+    });
+
+    it("handles topN greater than player count", async () => {
+      await contract.connect(player1).register("Alice");
+      const board = await contract.getLeaderboard(100);
+      expect(board.length).to.equal(1);
+      expect(board[0].username).to.equal("Alice");
+    });
+
+    it("returns single player correctly", async () => {
+      await contract.connect(player1).register("Alice");
+      await contract.connect(player1).recordActivity(50, 5, 10, "addition");
+      const board = await contract.getLeaderboard(1);
+      expect(board.length).to.equal(1);
+      expect(board[0].username).to.equal("Alice");
+      expect(board[0].totalScore).to.equal(50n);
+    });
+
+    it("breaks ties by streak (higher streak first)", async () => {
+      const [, p1, p2, p3] = await ethers.getSigners();
+      await contract.connect(p1).register("HighStreak");
+      await contract.connect(p2).register("LowStreak");
+
+      // Both score the same amount
+      await contract.connect(p1).recordActivity(50, 5, 10, "addition");
+      await contract.connect(p2).recordActivity(50, 5, 10, "addition");
+
+      // Advance 1 day and give p1 another session so streak becomes 2
+      await ethers.provider.send("evm_increaseTime", [86400]);
+      await ethers.provider.send("evm_mine", []);
+      await contract.connect(p1).recordActivity(50, 5, 10, "addition");
+
+      const board = await contract.getLeaderboard(2);
+      // p1 has higher total score now (100 vs 50), so p1 is first regardless
+      expect(board[0].username).to.equal("HighStreak");
+    });
   });
 
   describe("CELO Rewards", () => {

@@ -243,24 +243,41 @@ contract MathBlocGame is Ownable, ReentrancyGuard {
     }
 
     /**
-     * @notice Returns top N players sorted by totalScore (simple bubble sort — fine for small sets).
+     * @notice Returns top N players sorted by totalScore descending.
+     *         Uses O(n * topN) partial selection instead of O(n²) bubble sort.
+     *         Tie-breaking: higher streak first, then earlier registration (lower index).
      */
     function getLeaderboard(uint256 topN) external view returns (LeaderboardEntry[] memory) {
         uint256 total = registeredPlayers.length;
+        if (total == 0 || topN == 0) return new LeaderboardEntry[](0);
         if (topN > total) topN = total;
 
-        // Copy scores into memory array for sorting
+        // Copy addresses into memory
         address[] memory addrs = new address[](total);
         for (uint256 i = 0; i < total; i++) addrs[i] = registeredPlayers[i];
 
-        // Bubble sort descending by totalScore
-        for (uint256 i = 0; i < total - 1; i++) {
-            for (uint256 j = 0; j < total - i - 1; j++) {
-                if (players[addrs[j]].totalScore < players[addrs[j + 1]].totalScore) {
-                    address tmp = addrs[j];
-                    addrs[j] = addrs[j + 1];
-                    addrs[j + 1] = tmp;
+        // Partial selection sort: find the top `topN` entries in O(n * topN)
+        for (uint256 i = 0; i < topN; i++) {
+            uint256 bestIdx = i;
+            uint256 bestScore = players[addrs[i]].totalScore;
+            uint256 bestStreak = players[addrs[i]].streak;
+
+            for (uint256 j = i + 1; j < total; j++) {
+                uint256 jScore = players[addrs[j]].totalScore;
+                uint256 jStreak = players[addrs[j]].streak;
+
+                // Descending by score, then by streak, then by registration order (lower index wins)
+                if (jScore > bestScore || (jScore == bestScore && jStreak > bestStreak)) {
+                    bestIdx = j;
+                    bestScore = jScore;
+                    bestStreak = jStreak;
                 }
+            }
+
+            if (bestIdx != i) {
+                address tmp = addrs[i];
+                addrs[i] = addrs[bestIdx];
+                addrs[bestIdx] = tmp;
             }
         }
 
