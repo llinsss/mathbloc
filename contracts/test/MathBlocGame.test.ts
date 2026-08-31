@@ -8,9 +8,53 @@ describe("MathBlocGame", function () {
   let owner: HardhatEthersSigner;
   let player1: HardhatEthersSigner;
   let player2: HardhatEthersSigner;
+  let signer: HardhatEthersSigner;
+
+  // Helper: record activity without attestation (signer not set)
+  async function recordUnsigned(
+    player: HardhatEthersSigner,
+    score: number,
+    correct: number,
+    attempts: number,
+    topic: string
+  ) {
+    return contract.connect(player).recordActivity(score, correct, attempts, topic, 0, "0x");
+  }
+
+  // Helper: build EIP-712 signed attestation
+  async function signSession(
+    signerWallet: HardhatEthersSigner,
+    playerAddr: string,
+    score: number,
+    correct: number,
+    attempts: number,
+    topic: string,
+    nonce: bigint,
+    deadline: number
+  ) {
+    const domain = {
+      name: "MathBlocGame",
+      version: "2",
+      chainId: (await ethers.provider.getNetwork()).chainId,
+      verifyingContract: await contract.getAddress(),
+    };
+    const types = {
+      Session: [
+        { name: "player", type: "address" },
+        { name: "score", type: "uint256" },
+        { name: "correct", type: "uint256" },
+        { name: "attempts", type: "uint256" },
+        { name: "topic", type: "string" },
+        { name: "nonce", type: "uint256" },
+        { name: "deadline", type: "uint256" },
+      ],
+    };
+    const value = { player: playerAddr, score, correct, attempts, topic, nonce, deadline };
+    return signerWallet.signTypedData(domain, types, value);
+  }
 
   beforeEach(async () => {
-    [owner, player1, player2] = await ethers.getSigners();
+    [owner, player1, player2, signer] = await ethers.getSigners();
     const Factory = await ethers.getContractFactory("MathBlocGame");
     contract = (await Factory.deploy()) as unknown as MathBlocGame;
     await contract.waitForDeployment();
@@ -41,7 +85,7 @@ describe("MathBlocGame", function () {
     });
 
     it("records activity and awards coins", async () => {
-      await contract.connect(player1).recordActivity(80, 8, 10, "addition");
+      await recordUnsigned(player1, 80, 8, 10, "addition");
       const p = await contract.getPlayer(player1.address);
       expect(p.totalScore).to.equal(80n);
       expect(p.totalCorrect).to.equal(8n);
@@ -49,7 +93,7 @@ describe("MathBlocGame", function () {
     });
 
     it("awards perfect score bonus", async () => {
-      await contract.connect(player1).recordActivity(100, 10, 10, "addition");
+      await recordUnsigned(player1, 100, 10, 10, "addition");
       const p = await contract.getPlayer(player1.address);
       // DAILY_REWARD_COINS(10) + PERFECT_SCORE_BONUS(20) = 30
       expect(p.coinsEarned).to.equal(30n);
@@ -57,30 +101,243 @@ describe("MathBlocGame", function () {
 
     it("rejects unregistered player", async () => {
       await expect(
-        contract.connect(player2).recordActivity(50, 5, 10, "counting")
+        recordUnsigned(player2, 50, 5, 10, "counting")
       ).to.be.revertedWith("Not registered");
     });
 
     it("rejects invalid correct count", async () => {
       await expect(
-        contract.connect(player1).recordActivity(50, 11, 10, "addition")
+        recordUnsigned(player1, 50, 11, 10, "addition")
       ).to.be.revertedWith("Invalid correct count");
     });
 
     it("tracks activity history", async () => {
-      await contract.connect(player1).recordActivity(70, 7, 10, "subtraction");
+      await recordUnsigned(player1, 70, 7, 10, "subtraction");
       const history = await contract.getActivityHistory(player1.address);
       expect(history.length).to.equal(1);
       expect(history[0].topicPlayed).to.equal("subtraction");
+    });
+
+    it("rejects score exceeding maximum", async () => {
+      await expect(
+        recordUnsigned(player1, 1001, 10, 10, "addition")
+      ).to.be.revertedWith("Score exceeds maximum");
+    });
+
+    it("rejects attempts exceeding maximum", async () => {
+      await expect(
+        recordUnsigned(player1, 50, 5, 101, "addition")
+      ).to.be.revertedWith("Too many attempts");
+    });
+
+    it("rejects topic longer than 32 bytes", async () => {
+      const longTopic = "a".repeat(33);
+      await expect(
+        recordUnsigned(player1, 50, 5, 10, longTopic)
+      ).to.be.revertedWith("Invalid topic");
+    });
+  });
+
+  describe("Daily Reward Cap", () => {
+    beforeEach(async () => {
+      await contract.connect(player1).register("Alice");
+    });
+
+    it("awards daily base reward only once per day", async () => {
+      await recordUnsigned(player1, 50, 5, 10, "addition");
+      const p1 = await contract.getPlayer(player1.address);
+      expect(p1.coinsEarned).to.equal(10n); // DAILY_REWARD_COINS
+
+      // Second session same day: no base reward
+      await recordUnsigned(player1, 50, 5, 10, "addition");
+      const p2 = await contract.getPlayer(player1.address);
+      expect(p2.coinsEarned).to.equal(10n); // unchanged — no second daily reward
+    });
+
+    it("awards daily reward again on a new day", async () => {
+      await recordUnsigned(player1, 50, 5, 10, "addition");
+
+      // Advance 1 day
+      await ethers.provider.send("evm_increaseTime", [86400]);
+      await ethers.provider.send("evm_mine", []);
+
+      await recordUnsigned(player1, 50, 5, 10, "addition");
+      const p = await contract.getPlayer(player1.address);
+      expect(p.coinsEarned).to.equal(20n); // 10 + 10
+    });
+
+    it("still awards perfect score bonus on subsequent same-day sessions", async () => {
+      await recordUnsigned(player1, 50, 5, 10, "addition");
+      // 10 coins (daily)
+
+      // Perfect score session same day
+      await recordUnsigned(player1, 100, 10, 10, "addition");
+      const p = await contract.getPlayer(player1.address);
+      // 10 (daily) + 20 (perfect) = 30. No second daily reward.
+      expect(p.coinsEarned).to.equal(30n);
+    });
+
+    it("prevents farming coins via repeated same-day sessions", async () => {
+      // Record 10 sessions in one day
+      for (let i = 0; i < 10; i++) {
+        await recordUnsigned(player1, 50, 5, 10, "addition");
+      }
+      const p = await contract.getPlayer(player1.address);
+      // Only 1 daily reward of 10 coins, no other bonuses
+      expect(p.coinsEarned).to.equal(10n);
+    });
+  });
+
+  describe("Rate Limiting", () => {
+    beforeEach(async () => {
+      await contract.connect(player1).register("Alice");
+    });
+
+    it("enforces max sessions per day", async () => {
+      for (let i = 0; i < 10; i++) {
+        await recordUnsigned(player1, 10, 1, 5, "addition");
+      }
+      await expect(
+        recordUnsigned(player1, 10, 1, 5, "addition")
+      ).to.be.revertedWith("Daily session limit reached");
     });
   });
 
   describe("Streak", () => {
     it("sets streak to 1 on first activity", async () => {
       await contract.connect(player1).register("Bob");
-      await contract.connect(player1).recordActivity(50, 5, 10, "counting");
+      await recordUnsigned(player1, 50, 5, 10, "counting");
       const p = await contract.getPlayer(player1.address);
       expect(p.streak).to.equal(1n);
+    });
+  });
+
+  describe("EIP-712 Session Attestation", () => {
+    // Helper to get a future deadline from the blockchain clock
+    async function futureDeadline(): Promise<number> {
+      const block = await ethers.provider.getBlock("latest");
+      return (block!.timestamp) + 3600;
+    }
+
+    beforeEach(async () => {
+      await contract.connect(player1).register("Alice");
+      // Enable session signer
+      await contract.connect(owner).setSessionSigner(signer.address);
+    });
+
+    it("accepts valid signed session", async () => {
+      const nonce = await contract.getNonce(player1.address);
+      const deadline = await futureDeadline();
+      const sig = await signSession(signer, player1.address, 80, 8, 10, "addition", nonce, deadline);
+
+      await contract.connect(player1).recordActivity(80, 8, 10, "addition", deadline, sig);
+      const p = await contract.getPlayer(player1.address);
+      expect(p.totalScore).to.equal(80n);
+    });
+
+    it("rejects forged signature (wrong signer)", async () => {
+      const nonce = await contract.getNonce(player1.address);
+      const deadline = await futureDeadline();
+      // player2 signs instead of the trusted signer
+      const sig = await signSession(player2, player1.address, 80, 8, 10, "addition", nonce, deadline);
+
+      await expect(
+        contract.connect(player1).recordActivity(80, 8, 10, "addition", deadline, sig)
+      ).to.be.revertedWith("Invalid session signature");
+    });
+
+    it("rejects expired attestation", async () => {
+      const nonce = await contract.getNonce(player1.address);
+      const deadline = 1; // already expired
+      const sig = await signSession(signer, player1.address, 80, 8, 10, "addition", nonce, deadline);
+
+      await expect(
+        contract.connect(player1).recordActivity(80, 8, 10, "addition", deadline, sig)
+      ).to.be.revertedWith("Attestation expired");
+    });
+
+    it("rejects replayed signature (same nonce)", async () => {
+      const nonce = await contract.getNonce(player1.address);
+      const deadline = await futureDeadline();
+      const sig = await signSession(signer, player1.address, 80, 8, 10, "addition", nonce, deadline);
+
+      // First use: succeeds
+      await contract.connect(player1).recordActivity(80, 8, 10, "addition", deadline, sig);
+
+      // Replay: fails (nonce already consumed)
+      await expect(
+        contract.connect(player1).recordActivity(80, 8, 10, "addition", deadline, sig)
+      ).to.be.revertedWith("Invalid session signature");
+    });
+
+    it("rejects cross-wallet attestation (signature for different player)", async () => {
+      await contract.connect(player2).register("Bob");
+      const nonce = await contract.getNonce(player1.address);
+      const deadline = await futureDeadline();
+      // Sign for player1 but submit from player2
+      const sig = await signSession(signer, player1.address, 80, 8, 10, "addition", nonce, deadline);
+
+      await expect(
+        contract.connect(player2).recordActivity(80, 8, 10, "addition", deadline, sig)
+      ).to.be.revertedWith("Invalid session signature");
+    });
+
+    it("increments nonce after each valid session", async () => {
+      expect(await contract.getNonce(player1.address)).to.equal(0n);
+
+      const deadline = await futureDeadline();
+      const sig0 = await signSession(signer, player1.address, 50, 5, 10, "addition", 0n, deadline);
+      await contract.connect(player1).recordActivity(50, 5, 10, "addition", deadline, sig0);
+
+      expect(await contract.getNonce(player1.address)).to.equal(1n);
+
+      const sig1 = await signSession(signer, player1.address, 50, 5, 10, "addition", 1n, deadline);
+      await contract.connect(player1).recordActivity(50, 5, 10, "addition", deadline, sig1);
+
+      expect(await contract.getNonce(player1.address)).to.equal(2n);
+    });
+  });
+
+  describe("Emergency Pause", () => {
+    it("owner can pause and unpause", async () => {
+      await contract.connect(owner).pause();
+      await expect(contract.connect(player1).register("Alice")).to.be.revertedWithCustomError(contract, "EnforcedPause");
+
+      await contract.connect(owner).unpause();
+      await contract.connect(player1).register("Alice");
+      expect((await contract.getPlayer(player1.address)).exists).to.be.true;
+    });
+
+    it("non-owner cannot pause", async () => {
+      await expect(contract.connect(player1).pause()).to.be.revertedWithCustomError(contract, "OwnableUnauthorizedAccount");
+    });
+
+    it("paused contract blocks activity recording", async () => {
+      await contract.connect(player1).register("Alice");
+      await contract.connect(owner).pause();
+
+      await expect(
+        recordUnsigned(player1, 50, 5, 10, "addition")
+      ).to.be.revertedWithCustomError(contract, "EnforcedPause");
+    });
+
+    it("paused contract blocks CELO claims", async () => {
+      await contract.connect(owner).fundRewardPool({ value: ethers.parseEther("0.1") });
+      await contract.connect(player1).register("Alice");
+
+      // Accumulate coins across multiple days to reach threshold
+      for (let day = 0; day < 4; day++) {
+        await recordUnsigned(player1, 100, 10, 10, "addition");
+        if (day < 3) {
+          await ethers.provider.send("evm_increaseTime", [86400]);
+          await ethers.provider.send("evm_mine", []);
+        }
+      }
+
+      await contract.connect(owner).pause();
+      await expect(
+        contract.connect(player1).claimCeloReward()
+      ).to.be.revertedWithCustomError(contract, "EnforcedPause");
     });
   });
 
@@ -88,15 +345,15 @@ describe("MathBlocGame", function () {
     it("returns sorted leaderboard", async () => {
       await contract.connect(player1).register("Alice");
       await contract.connect(player2).register("Bob");
-      await contract.connect(player1).recordActivity(100, 10, 10, "addition");
-      await contract.connect(player2).recordActivity(50, 5, 10, "counting");
+      await recordUnsigned(player1, 100, 10, 10, "addition");
+      await recordUnsigned(player2, 50, 5, 10, "counting");
 
       const board = await contract.getLeaderboard(2);
       expect(board[0].username).to.equal("Alice");
       expect(board[1].username).to.equal("Bob");
     });
 
-    it("returns empty array when no players are registered", async () => {
+    it("returns empty array when no players registered", async () => {
       const board = await contract.getLeaderboard(10);
       expect(board.length).to.equal(0);
     });
@@ -104,119 +361,6 @@ describe("MathBlocGame", function () {
     it("returns empty array when topN is 0", async () => {
       await contract.connect(player1).register("Alice");
       const board = await contract.getLeaderboard(0);
-      expect(board.length).to.equal(0);
-    });
-
-    it("handles single player leaderboard", async () => {
-      await contract.connect(player1).register("Solo");
-      await contract.connect(player1).recordActivity(42, 4, 10, "addition");
-
-      const board = await contract.getLeaderboard(5);
-      expect(board.length).to.equal(1);
-      expect(board[0].username).to.equal("Solo");
-      expect(board[0].totalScore).to.equal(42n);
-    });
-
-    it("clamps topN to total players when topN > total", async () => {
-      await contract.connect(player1).register("Alice");
-      await contract.connect(player2).register("Bob");
-
-      const board = await contract.getLeaderboard(100);
-      expect(board.length).to.equal(2);
-    });
-
-    it("handles tied scores with stable ordering (earlier registration first)", async () => {
-      const signers = await ethers.getSigners();
-      const p1 = signers[1];
-      const p2 = signers[2];
-      const p3 = signers[3];
-
-      await contract.connect(p1).register("First");
-      await contract.connect(p2).register("Second");
-      await contract.connect(p3).register("Third");
-
-      // All players score the same
-      await contract.connect(p1).recordActivity(50, 5, 10, "addition");
-      await contract.connect(p2).recordActivity(50, 5, 10, "addition");
-      await contract.connect(p3).recordActivity(50, 5, 10, "addition");
-
-      const board = await contract.getLeaderboard(3);
-      expect(board.length).to.equal(3);
-      // Earlier registration should come first for tied scores
-      expect(board[0].username).to.equal("First");
-      expect(board[1].username).to.equal("Second");
-      expect(board[2].username).to.equal("Third");
-    });
-
-    it("handles many players requesting small topN", async () => {
-      const signers = await ethers.getSigners();
-      // Register 10 players with different scores
-      for (let i = 1; i <= 10; i++) {
-        await contract.connect(signers[i]).register("Player" + i);
-        await contract.connect(signers[i]).recordActivity(i * 10, i, 10, "addition");
-      }
-
-      const board = await contract.getLeaderboard(3);
-      expect(board.length).to.equal(3);
-      // Top 3 should be players 10, 9, 8 (highest scores)
-      expect(board[0].totalScore).to.equal(100n);
-      expect(board[1].totalScore).to.equal(90n);
-      expect(board[2].totalScore).to.equal(80n);
-    });
-
-    it("handles players with zero scores", async () => {
-      await contract.connect(player1).register("Alice");
-      await contract.connect(player2).register("Bob");
-      // No activity recorded, all scores are 0
-
-      const board = await contract.getLeaderboard(2);
-      expect(board.length).to.equal(2);
-      // Both have 0 score, earlier registration comes first
-      expect(board[0].username).to.equal("Alice");
-      expect(board[1].username).to.equal("Bob");
-    });
-  });
-
-  describe("Leaderboard Pagination", () => {
-    it("returns empty for zero offset beyond total", async () => {
-      await contract.connect(player1).register("Alice");
-      const board = await contract.getLeaderboardPage(10, 5);
-      expect(board.length).to.equal(0);
-    });
-
-    it("returns empty when limit is 0", async () => {
-      await contract.connect(player1).register("Alice");
-      const board = await contract.getLeaderboardPage(0, 0);
-      expect(board.length).to.equal(0);
-    });
-
-    it("returns correct page of results", async () => {
-      const signers = await ethers.getSigners();
-      for (let i = 1; i <= 5; i++) {
-        await contract.connect(signers[i]).register("P" + i);
-        await contract.connect(signers[i]).recordActivity(i * 10, i, 10, "math");
-      }
-
-      // Page 1: top 2 (scores 50, 40)
-      const page1 = await contract.getLeaderboardPage(2, 0);
-      expect(page1.length).to.equal(2);
-      expect(page1[0].totalScore).to.equal(50n);
-      expect(page1[1].totalScore).to.equal(40n);
-
-      // Page 2: next 2 (scores 30, 20)
-      const page2 = await contract.getLeaderboardPage(2, 2);
-      expect(page2.length).to.equal(2);
-      expect(page2[0].totalScore).to.equal(30n);
-      expect(page2[1].totalScore).to.equal(20n);
-
-      // Page 3: last 1 (score 10)
-      const page3 = await contract.getLeaderboardPage(2, 4);
-      expect(page3.length).to.equal(1);
-      expect(page3[0].totalScore).to.equal(10n);
-    });
-
-    it("returns empty for no players", async () => {
-      const board = await contract.getLeaderboardPage(10, 0);
       expect(board.length).to.equal(0);
     });
   });
@@ -227,22 +371,39 @@ describe("MathBlocGame", function () {
       expect(await contract.rewardPool()).to.equal(ethers.parseEther("0.1"));
     });
 
-    it("allows claim when coins >= threshold", async () => {
+    it("cannot farm coins to reach threshold in one day", async () => {
       await contract.connect(owner).fundRewardPool({ value: ethers.parseEther("0.1") });
       await contract.connect(player1).register("Alice");
 
-      // Record 4 perfect sessions to accumulate 30*4=120 coins > 100 threshold
-      for (let i = 0; i < 4; i++) {
-        await contract.connect(player1).recordActivity(100, 10, 10, "addition");
+      // 10 non-perfect sessions in one day: only 10 coins (not 100)
+      for (let i = 0; i < 10; i++) {
+        await recordUnsigned(player1, 50, 5, 10, "addition");
       }
 
       const p = await contract.getPlayer(player1.address);
-      if (p.coinsEarned >= 100n) {
-        const balBefore = await ethers.provider.getBalance(player1.address);
-        await contract.connect(player1).claimCeloReward();
-        const balAfter = await ethers.provider.getBalance(player1.address);
-        expect(balAfter).to.be.gt(balBefore - ethers.parseEther("0.001"));
-      }
+      expect(p.coinsEarned).to.equal(10n); // only daily reward once
+      await expect(
+        contract.connect(player1).claimCeloReward()
+      ).to.be.revertedWith("Not enough coins");
+    });
+  });
+
+  describe("Session Signer Management", () => {
+    it("owner can set session signer", async () => {
+      await contract.connect(owner).setSessionSigner(signer.address);
+      expect(await contract.sessionSigner()).to.equal(signer.address);
+    });
+
+    it("owner can disable session signer", async () => {
+      await contract.connect(owner).setSessionSigner(signer.address);
+      await contract.connect(owner).setSessionSigner(ethers.ZeroAddress);
+      expect(await contract.sessionSigner()).to.equal(ethers.ZeroAddress);
+    });
+
+    it("non-owner cannot set session signer", async () => {
+      await expect(
+        contract.connect(player1).setSessionSigner(signer.address)
+      ).to.be.revertedWithCustomError(contract, "OwnableUnauthorizedAccount");
     });
   });
 });

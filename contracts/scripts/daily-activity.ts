@@ -69,7 +69,9 @@ async function main() {
         8,         // correct
         10,        // attempts
         "keeper",  // topic
-        { gasLimit: 300000 }
+        0,         // deadline (no attestation when signer not set)
+        "0x",      // signature (empty when signer not set)
+        { gasLimit: 400000 }
       );
       await tx.wait();
       console.log(`✅ Keeper activity recorded. TX: ${tx.hash}`);
