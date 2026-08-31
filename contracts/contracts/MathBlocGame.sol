@@ -22,7 +22,7 @@ import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
  */
 contract MathBlocGame is Ownable, ReentrancyGuard, Pausable, EIP712 {
 
-    // ─── Structs ────────────────────────────────────────────────────────────
+    // --- Structs ---
 
     struct Player {
         string  username;
@@ -349,33 +349,131 @@ contract MathBlocGame is Ownable, ReentrancyGuard, Pausable, EIP712 {
     }
 
     /**
-     * @notice Returns top N players sorted by totalScore (simple bubble sort — fine for small sets).
+     * @notice Returns top N players sorted by totalScore descending.
+     *         Uses a bounded insertion-sort (O(total * topN)) instead of a
+     *         full O(n^2) bubble sort, and safely handles zero-player /
+     *         zero-topN edge cases.
+     *         Tie-breaking: equal totalScore is ordered by earlier registration
+     *         (lower index in registeredPlayers comes first).
+     * @param topN  Maximum entries to return.  Clamped to registeredPlayers.length.
      */
     function getLeaderboard(uint256 topN) external view returns (LeaderboardEntry[] memory) {
         uint256 total = registeredPlayers.length;
+
+        // Edge cases: nothing to return
+        if (total == 0 || topN == 0) {
+            return new LeaderboardEntry[](0);
+        }
         if (topN > total) topN = total;
         if (total == 0 || topN == 0) return new LeaderboardEntry[](0);
 
-        // Copy scores into memory array for sorting
-        address[] memory addrs = new address[](total);
-        for (uint256 i = 0; i < total; i++) addrs[i] = registeredPlayers[i];
+        // Bounded top-K via insertion into a fixed-size array.
+        // We maintain a sorted array of length topN. For every registered
+        // player we find the correct insertion position and shift only the
+        // tail of the small array, giving O(total * topN) worst-case, which
+        // is O(total) when topN is a constant (e.g. 10 or 100).
+        address[] memory top = new address[](topN);
+        uint256[] memory topScores = new uint256[](topN);
+        uint256 filled = 0; // how many slots are occupied so far
 
-        // Bubble sort descending by totalScore
-        for (uint256 i = 0; i < total - 1; i++) {
-            for (uint256 j = 0; j < total - i - 1; j++) {
-                if (players[addrs[j]].totalScore < players[addrs[j + 1]].totalScore) {
-                    address tmp = addrs[j];
-                    addrs[j] = addrs[j + 1];
-                    addrs[j + 1] = tmp;
+        for (uint256 i = 0; i < total; i++) {
+            address addr = registeredPlayers[i];
+            uint256 sc   = players[addr].totalScore;
+
+            // Skip if the board is full and this score cannot make it in.
+            if (filled == topN && sc <= topScores[topN - 1]) continue;
+
+            // Find insertion position (first index whose score is < sc,
+            // or whose score == sc but was registered later, so earlier
+            // registrations stay ahead for tie-breaking).
+            uint256 pos = filled < topN ? filled : topN - 1;
+            for (uint256 k = 0; k < filled && k < topN; k++) {
+                if (sc > topScores[k]) {
+                    pos = k;
+                    break;
                 }
             }
+
+            // Shift elements from pos to the right to make room.
+            uint256 end = filled < topN ? filled : topN - 1;
+            for (uint256 k = end; k > pos; k--) {
+                top[k]       = top[k - 1];
+                topScores[k] = topScores[k - 1];
+            }
+
+            top[pos]       = addr;
+            topScores[pos] = sc;
+
+            if (filled < topN) filled++;
         }
 
-        LeaderboardEntry[] memory board = new LeaderboardEntry[](topN);
-        for (uint256 i = 0; i < topN; i++) {
-            Player storage p = players[addrs[i]];
+        // Build result
+        LeaderboardEntry[] memory board = new LeaderboardEntry[](filled);
+        for (uint256 i = 0; i < filled; i++) {
+            Player storage p = players[top[i]];
             board[i] = LeaderboardEntry({
-                player:     addrs[i],
+                player:     top[i],
+                username:   p.username,
+                totalScore: p.totalScore,
+                streak:     p.streak
+            });
+        }
+        return board;
+    }
+
+    /**
+     * @notice Paginated leaderboard -- returns entries ranked from offset
+     *         to offset + limit - 1 (0-indexed).  Useful for off-chain UIs
+     *         that page through the full leaderboard.
+     * @param limit   Maximum entries per page.
+     * @param offset  Number of top entries to skip.
+     */
+    function getLeaderboardPage(uint256 limit, uint256 offset)
+        external view returns (LeaderboardEntry[] memory)
+    {
+        uint256 total = registeredPlayers.length;
+        if (total == 0 || limit == 0 || offset >= total) {
+            return new LeaderboardEntry[](0);
+        }
+
+        // We need the top (offset + limit) entries, then slice [offset..].
+        uint256 need = offset + limit;
+        if (need > total) need = total;
+
+        // Reuse top-K insertion sort for need entries
+        address[] memory top = new address[](need);
+        uint256[] memory topScores = new uint256[](need);
+        uint256 filled = 0;
+
+        for (uint256 i = 0; i < total; i++) {
+            address addr = registeredPlayers[i];
+            uint256 sc   = players[addr].totalScore;
+
+            if (filled == need && sc <= topScores[need - 1]) continue;
+
+            uint256 pos = filled < need ? filled : need - 1;
+            for (uint256 k = 0; k < filled && k < need; k++) {
+                if (sc > topScores[k]) { pos = k; break; }
+            }
+
+            uint256 end = filled < need ? filled : need - 1;
+            for (uint256 k = end; k > pos; k--) {
+                top[k]       = top[k - 1];
+                topScores[k] = topScores[k - 1];
+            }
+            top[pos]       = addr;
+            topScores[pos] = sc;
+            if (filled < need) filled++;
+        }
+
+        // Slice [offset .. filled)
+        uint256 start = offset < filled ? offset : filled;
+        uint256 count = filled > start ? filled - start : 0;
+        LeaderboardEntry[] memory board = new LeaderboardEntry[](count);
+        for (uint256 i = 0; i < count; i++) {
+            Player storage p = players[top[start + i]];
+            board[i] = LeaderboardEntry({
+                player:     top[start + i],
                 username:   p.username,
                 totalScore: p.totalScore,
                 streak:     p.streak
