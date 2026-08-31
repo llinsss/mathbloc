@@ -13,10 +13,11 @@ An educational math game for children aged 2–9 with an on-chain reward system 
 
 ---
 
-## Tech Stack
+## Tech Stack & Runtime Requirements
 
 | Layer | Tech |
 |---|---|
+| Runtime | Node.js `>=20.9.0` (pinned via `.nvmrc` `20`), npm `>=10.0.0` |
 | Frontend | Next.js 16, React 19, Tailwind CSS |
 | State | Zustand (persisted to localStorage) |
 | Smart Contract | Solidity 0.8.24, Hardhat 2 |
@@ -27,22 +28,50 @@ An educational math game for children aged 2–9 with an on-chain reward system 
 
 ## Getting Started
 
-### 1. Install dependencies
+### 1. Prerequisites
+Ensure you are using the supported Node.js and npm versions:
 ```bash
-npm install
+nvm use
+# Node >= 20.9.0, npm >= 10.0.0
 ```
 
-### 2. Set up environment
+### 2. Install dependencies
+```bash
+npm ci
+```
+
+### 3. Set up environment
 ```bash
 cp .env.example .env.local
 # Fill in your DEPLOYER_PRIVATE_KEY
 ```
 
-### 3. Run locally
+### 4. Run locally
 ```bash
 npm run dev
 # Open http://localhost:3000
 ```
+
+---
+
+## Local Validation (Matches CI)
+
+Run the full local validation sequence matching the CI workflow:
+
+```bash
+npm ci && npm run lint && npm run type-check && npm test && npm run test:network && npm run compile && npm run test:contracts && npm run test:coverage && npm run build
+```
+
+### Individual Test Commands
+
+- **Frontend unit & component tests**: `npm test`
+- **TypeScript type checking**: `npm run type-check`
+- **ESLint**: `npm run lint`
+- **Network configuration tests**: `npm run test:network`
+- **Compile smart contracts**: `npm run compile`
+- **Smart contract tests**: `npm run test:contracts`
+- **Smart contract coverage**: `npm run test:coverage`
+- **Production build**: `npm run build`
 
 ---
 
@@ -73,6 +102,12 @@ Deployed on **Celo Alfajores Testnet**.
 ### Compile
 ```bash
 npm run compile
+```
+
+### Test & Coverage
+```bash
+npm run test:contracts
+npm run test:coverage
 ```
 
 ### Deploy to Alfajores (testnet)
@@ -132,14 +167,15 @@ mathbloc/
 │   ├── data.ts             # Story chapters, badges, TTS
 │   ├── useContract.ts      # ethers.js contract hook
 │   └── contract.json       # Auto-generated after deploy
-└── contracts/
-    ├── contracts/
-    │   └── MathBlocGame.sol
-    ├── scripts/
-    │   ├── deploy.ts
-    │   └── daily-activity.ts
-    └── test/
-        └── MathBlocGame.test.ts
+├── contracts/
+│   ├── contracts/
+│   │   └── MathBlocGame.sol
+│   ├── scripts/
+│   │   ├── deploy.ts
+│   │   └── daily-activity.ts
+│   └── test/
+│       └── MathBlocGame.test.ts
+└── tests/                  # Frontend unit & regression tests
 ```
 
 ---

@@ -12,6 +12,11 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    "coverage/**",
+    "coverage.json",
+    "contracts/typechain-types/**",
+    "contracts/artifacts/**",
+    "contracts/cache/**",
   ]),
   {
     files: ["contracts/scripts/**/*.cjs"],
@@ -23,6 +28,7 @@ const eslintConfig = defineConfig([
     files: ["contracts/test/**/*.ts"],
     rules: {
       "@typescript-eslint/no-unused-expressions": "off",
+      "@typescript-eslint/no-explicit-any": "off",
     },
   },
 ]);

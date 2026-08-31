@@ -359,6 +359,10 @@ contract MathBlocGame is Ownable, ReentrancyGuard, Pausable, EIP712 {
      */
     function getLeaderboard(uint256 topN) external view returns (LeaderboardEntry[] memory) {
         uint256 total = registeredPlayers.length;
+        if (total == 0 || topN == 0) {
+            return new LeaderboardEntry[](0);
+        }
+        if (topN > total) topN = total;
 
         // Edge cases: nothing to return
         if (total == 0 || topN == 0) {

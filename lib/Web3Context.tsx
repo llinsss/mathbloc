@@ -2,7 +2,7 @@
 import { createContext, useContext, type ReactNode } from 'react';
 import { useContract, type OnChainPlayer, type LeaderboardEntry } from './useContract';
 
-interface Web3ContextValue {
+export interface Web3ContextValue {
   connect: () => Promise<void>;
   connected: boolean;
   address: string | null;
