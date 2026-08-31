@@ -83,7 +83,7 @@ describe("MathBlocGame", function () {
 
     it("rejects unregistered player", async () => {
       await expect(
-        contract.connect(player2).recordActivity(50, 5, 10, "counting")
+        recordUnsigned(player2, 50, 5, 10, "counting")
       ).to.be.revertedWith("Not registered");
     });
 
@@ -95,7 +95,7 @@ describe("MathBlocGame", function () {
 
     it("rejects invalid correct count exceeding attempts", async () => {
       await expect(
-        contract.connect(player1).recordActivity(50, 11, 10, "addition")
+        recordUnsigned(player1, 50, 11, 10, "addition")
       ).to.be.revertedWith("Invalid correct count");
     });
 
@@ -146,6 +146,90 @@ describe("MathBlocGame", function () {
       const dailyActive = await contract.getDailyActivePlayers(today);
       expect(dailyActive.length).to.equal(2);
     });
+
+    it("rejects score exceeding maximum", async () => {
+      await expect(
+        recordUnsigned(player1, 1001, 10, 10, "addition")
+      ).to.be.revertedWith("Score exceeds maximum");
+    });
+
+    it("rejects attempts exceeding maximum", async () => {
+      await expect(
+        recordUnsigned(player1, 50, 5, 101, "addition")
+      ).to.be.revertedWith("Too many attempts");
+    });
+
+    it("rejects topic longer than 32 bytes", async () => {
+      const longTopic = "a".repeat(33);
+      await expect(
+        recordUnsigned(player1, 50, 5, 10, longTopic)
+      ).to.be.revertedWith("Invalid topic");
+    });
+  });
+
+  describe("Daily Reward Cap", () => {
+    beforeEach(async () => {
+      await contract.connect(player1).register("Alice");
+    });
+
+    it("awards daily base reward only once per day", async () => {
+      await recordUnsigned(player1, 50, 5, 10, "addition");
+      const p1 = await contract.getPlayer(player1.address);
+      expect(p1.coinsEarned).to.equal(10n); // DAILY_REWARD_COINS
+
+      // Second session same day: no base reward
+      await recordUnsigned(player1, 50, 5, 10, "addition");
+      const p2 = await contract.getPlayer(player1.address);
+      expect(p2.coinsEarned).to.equal(10n); // unchanged — no second daily reward
+    });
+
+    it("awards daily reward again on a new day", async () => {
+      await recordUnsigned(player1, 50, 5, 10, "addition");
+
+      // Advance 1 day
+      await ethers.provider.send("evm_increaseTime", [86400]);
+      await ethers.provider.send("evm_mine", []);
+
+      await recordUnsigned(player1, 50, 5, 10, "addition");
+      const p = await contract.getPlayer(player1.address);
+      expect(p.coinsEarned).to.equal(20n); // 10 + 10
+    });
+
+    it("still awards perfect score bonus on subsequent same-day sessions", async () => {
+      await recordUnsigned(player1, 50, 5, 10, "addition");
+      // 10 coins (daily)
+
+      // Perfect score session same day
+      await recordUnsigned(player1, 100, 10, 10, "addition");
+      const p = await contract.getPlayer(player1.address);
+      // 10 (daily) + 20 (perfect) = 30. No second daily reward.
+      expect(p.coinsEarned).to.equal(30n);
+    });
+
+    it("prevents farming coins via repeated same-day sessions", async () => {
+      // Record 10 sessions in one day
+      for (let i = 0; i < 10; i++) {
+        await recordUnsigned(player1, 50, 5, 10, "addition");
+      }
+      const p = await contract.getPlayer(player1.address);
+      // Only 1 daily reward of 10 coins, no other bonuses
+      expect(p.coinsEarned).to.equal(10n);
+    });
+  });
+
+  describe("Rate Limiting", () => {
+    beforeEach(async () => {
+      await contract.connect(player1).register("Alice");
+    });
+
+    it("enforces max sessions per day", async () => {
+      for (let i = 0; i < 10; i++) {
+        await recordUnsigned(player1, 10, 1, 5, "addition");
+      }
+      await expect(
+        recordUnsigned(player1, 10, 1, 5, "addition")
+      ).to.be.revertedWith("Daily session limit reached");
+    });
   });
 
   describe("Streak Logic and Milestones", () => {
@@ -192,6 +276,135 @@ describe("MathBlocGame", function () {
       // Day 7: 10 + 5 * (7 / 7) = 15
       // Total coins = 75
       expect(p.coinsEarned).to.equal(75n);
+    });
+  });
+
+  describe("EIP-712 Session Attestation", () => {
+    // Helper to get a future deadline from the blockchain clock
+    async function futureDeadline(): Promise<number> {
+      const block = await ethers.provider.getBlock("latest");
+      return (block!.timestamp) + 3600;
+    }
+
+    beforeEach(async () => {
+      await contract.connect(player1).register("Alice");
+      // Enable session signer
+      await contract.connect(owner).setSessionSigner(signer.address);
+    });
+
+    it("accepts valid signed session", async () => {
+      const nonce = await contract.getNonce(player1.address);
+      const deadline = await futureDeadline();
+      const sig = await signSession(signer, player1.address, 80, 8, 10, "addition", nonce, deadline);
+
+      await contract.connect(player1).recordActivity(80, 8, 10, "addition", deadline, sig);
+      const p = await contract.getPlayer(player1.address);
+      expect(p.totalScore).to.equal(80n);
+    });
+
+    it("rejects forged signature (wrong signer)", async () => {
+      const nonce = await contract.getNonce(player1.address);
+      const deadline = await futureDeadline();
+      // player2 signs instead of the trusted signer
+      const sig = await signSession(player2, player1.address, 80, 8, 10, "addition", nonce, deadline);
+
+      await expect(
+        contract.connect(player1).recordActivity(80, 8, 10, "addition", deadline, sig)
+      ).to.be.revertedWith("Invalid session signature");
+    });
+
+    it("rejects expired attestation", async () => {
+      const nonce = await contract.getNonce(player1.address);
+      const deadline = 1; // already expired
+      const sig = await signSession(signer, player1.address, 80, 8, 10, "addition", nonce, deadline);
+
+      await expect(
+        contract.connect(player1).recordActivity(80, 8, 10, "addition", deadline, sig)
+      ).to.be.revertedWith("Attestation expired");
+    });
+
+    it("rejects replayed signature (same nonce)", async () => {
+      const nonce = await contract.getNonce(player1.address);
+      const deadline = await futureDeadline();
+      const sig = await signSession(signer, player1.address, 80, 8, 10, "addition", nonce, deadline);
+
+      // First use: succeeds
+      await contract.connect(player1).recordActivity(80, 8, 10, "addition", deadline, sig);
+
+      // Replay: fails (nonce already consumed)
+      await expect(
+        contract.connect(player1).recordActivity(80, 8, 10, "addition", deadline, sig)
+      ).to.be.revertedWith("Invalid session signature");
+    });
+
+    it("rejects cross-wallet attestation (signature for different player)", async () => {
+      await contract.connect(player2).register("Bob");
+      const nonce = await contract.getNonce(player1.address);
+      const deadline = await futureDeadline();
+      // Sign for player1 but submit from player2
+      const sig = await signSession(signer, player1.address, 80, 8, 10, "addition", nonce, deadline);
+
+      await expect(
+        contract.connect(player2).recordActivity(80, 8, 10, "addition", deadline, sig)
+      ).to.be.revertedWith("Invalid session signature");
+    });
+
+    it("increments nonce after each valid session", async () => {
+      expect(await contract.getNonce(player1.address)).to.equal(0n);
+
+      const deadline = await futureDeadline();
+      const sig0 = await signSession(signer, player1.address, 50, 5, 10, "addition", 0n, deadline);
+      await contract.connect(player1).recordActivity(50, 5, 10, "addition", deadline, sig0);
+
+      expect(await contract.getNonce(player1.address)).to.equal(1n);
+
+      const sig1 = await signSession(signer, player1.address, 50, 5, 10, "addition", 1n, deadline);
+      await contract.connect(player1).recordActivity(50, 5, 10, "addition", deadline, sig1);
+
+      expect(await contract.getNonce(player1.address)).to.equal(2n);
+    });
+  });
+
+  describe("Emergency Pause", () => {
+    it("owner can pause and unpause", async () => {
+      await contract.connect(owner).pause();
+      await expect(contract.connect(player1).register("Alice")).to.be.revertedWithCustomError(contract, "EnforcedPause");
+
+      await contract.connect(owner).unpause();
+      await contract.connect(player1).register("Alice");
+      expect((await contract.getPlayer(player1.address)).exists).to.be.true;
+    });
+
+    it("non-owner cannot pause", async () => {
+      await expect(contract.connect(player1).pause()).to.be.revertedWithCustomError(contract, "OwnableUnauthorizedAccount");
+    });
+
+    it("paused contract blocks activity recording", async () => {
+      await contract.connect(player1).register("Alice");
+      await contract.connect(owner).pause();
+
+      await expect(
+        recordUnsigned(player1, 50, 5, 10, "addition")
+      ).to.be.revertedWithCustomError(contract, "EnforcedPause");
+    });
+
+    it("paused contract blocks CELO claims", async () => {
+      await contract.connect(owner).fundRewardPool({ value: ethers.parseEther("0.1") });
+      await contract.connect(player1).register("Alice");
+
+      // Accumulate coins across multiple days to reach threshold
+      for (let day = 0; day < 4; day++) {
+        await recordUnsigned(player1, 100, 10, 10, "addition");
+        if (day < 3) {
+          await ethers.provider.send("evm_increaseTime", [86400]);
+          await ethers.provider.send("evm_mine", []);
+        }
+      }
+
+      await contract.connect(owner).pause();
+      await expect(
+        contract.connect(player1).claimCeloReward()
+      ).to.be.revertedWithCustomError(contract, "EnforcedPause");
     });
   });
 
@@ -250,6 +463,17 @@ describe("MathBlocGame", function () {
       expect(top2.length).to.equal(2);
       expect(top2[0].username).to.equal("Bob");
       expect(top2[1].username).to.equal("Charlie");
+    });
+
+    it("returns empty array when no players registered", async () => {
+      const board = await contract.getLeaderboard(10);
+      expect(board.length).to.equal(0);
+    });
+
+    it("returns empty array when topN is 0", async () => {
+      await contract.connect(player1).register("Alice");
+      const board = await contract.getLeaderboard(0);
+      expect(board.length).to.equal(0);
     });
   });
 
